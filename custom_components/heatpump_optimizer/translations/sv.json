@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Värmepumpsoptimering - Konfiguration",
+        "description": "Konfigurera din värmepumpsoptimering. Du behöver en Tibber API-nyckel (hämta på https://developer.tibber.com) och en väderentitet.",
+        "data": {
+          "name": "Integrationsnamn",
+          "tibber_token": "Tibber API-nyckel",
+          "weather_entity": "Väderentitet (för prognoser)",
+          "indoor_temp_entity": "Inomhustemperatursensor (valfritt)",
+          "outdoor_temp_entity": "Utomhustemperatursensor (valfritt)",
+          "heat_pump_entity": "Värmepump klimatentitet (valfritt)",
+          "heat_pump_switch_entity": "Värmepump strömbrytare (valfritt)"
+        }
+      },
+      "temperature": {
+        "title": "Temperaturinställningar",
+        "description": "Konfigurera önskat temperaturintervall och komfortinställningar.",
+        "data": {
+          "target_temperature": "Måltemperatur",
+          "min_temperature": "Lägsta tillåtna temperatur",
+          "max_temperature": "Högsta tillåtna temperatur",
+          "comfort_temp_day": "Komforttemperatur dag",
+          "comfort_temp_night": "Komforttemperatur natt",
+          "day_start_hour": "Dag börjar (timme)",
+          "day_end_hour": "Dag slutar (timme)"
+        }
+      },
+      "thermal": {
+        "title": "Termisk modell & Optimering",
+        "description": "Konfigurera husets termiska egenskaper och värmepump. Standardvärdena fungerar för ett typiskt välisolerat skandinaviskt hus med golvvärme i platta. Justera vid behov.",
+        "data": {
+          "house_thermal_mass": "Husets termiska massa (kWh/°C)",
+          "house_heat_loss_coefficient": "Värmeförlustkoefficient (kW/°C)",
+          "slab_thermal_mass": "Plattans termiska massa (kWh/°C)",
+          "slab_heat_transfer": "Platta-till-rum värmeöverföring (kW/°C)",
+          "heat_pump_cop_nominal": "Värmepumpens nominella COP",
+          "heat_pump_max_power": "Värmepump max effekt (kW)",
+          "heat_pump_min_power": "Värmepump min effekt (kW)",
+          "optimization_interval": "Optimeringsintervall (min)",
+          "price_weight": "Prisvikt",
+          "comfort_weight": "Komfortvikt"
+        }
+      }
+    },
+    "error": {
+      "invalid_tibber_token": "Ogiltig Tibber API-nyckel. Kontrollera och försök igen."
+    },
+    "abort": {
+      "already_configured": "Denna integration är redan konfigurerad."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Värmepumpsoptimering - Alternativ",
+        "description": "Justera temperaturmål och optimeringsvikter.",
+        "data": {
+          "target_temperature": "Måltemperatur (°C)",
+          "min_temperature": "Lägsta temperatur (°C)",
+          "max_temperature": "Högsta temperatur (°C)",
+          "price_weight": "Prisvikt",
+          "comfort_weight": "Komfortvikt",
+          "optimization_interval": "Optimeringsintervall (min)"
+        }
+      }
+    }
+  }
+}

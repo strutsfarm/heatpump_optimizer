@@ -1,0 +1,100 @@
+run_optimization:
+  name: Run Optimization
+  description: >-
+    Manually trigger the heat pump cost optimization. This will fetch
+    the latest electricity prices and weather forecast, then compute
+    the optimal heat pump schedule for the next 24 hours.
+
+set_mode:
+  name: Set Optimizer Mode
+  description: >-
+    Set the operating mode of the heat pump optimizer.
+  fields:
+    mode:
+      name: Mode
+      description: >-
+        The operating mode to set. Available modes:
+        - auto: Full MPC optimization (recommended)
+        - comfort: Maintain comfort temperature, ignore price optimization
+        - economy: Aggressive cost savings, wider temperature swings allowed
+        - boost: Maximum heating power
+        - off: Disable optimizer, heat pump left in default state
+      required: true
+      example: "auto"
+      selector:
+        select:
+          options:
+            - auto
+            - comfort
+            - economy
+            - boost
+            - "off"
+
+set_thermal_parameters:
+  name: Set Thermal Parameters
+  description: >-
+    Update the thermal model parameters used by the optimizer.
+    Useful for fine-tuning the model to match your house's actual
+    thermal behavior.
+  fields:
+    house_thermal_mass:
+      name: House Thermal Mass
+      description: >-
+        Thermal mass of the house (air + furnishings) in kWh/°C.
+        Higher values mean slower temperature changes.
+      required: false
+      example: 10.0
+      selector:
+        number:
+          min: 2
+          max: 50
+          step: 0.5
+          unit_of_measurement: "kWh/°C"
+    house_heat_loss_coefficient:
+      name: Heat Loss Coefficient
+      description: >-
+        Overall heat loss coefficient in kW/°C. Lower values
+        indicate better insulation.
+      required: false
+      example: 0.15
+      selector:
+        number:
+          min: 0.05
+          max: 1.0
+          step: 0.01
+          unit_of_measurement: "kW/°C"
+    slab_thermal_mass:
+      name: Slab Thermal Mass
+      description: >-
+        Thermal mass of the concrete slab floor in kWh/°C.
+      required: false
+      example: 5.0
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 0.5
+          unit_of_measurement: "kWh/°C"
+    slab_heat_transfer:
+      name: Slab Heat Transfer Coefficient
+      description: >-
+        Heat transfer coefficient between slab and room in kW/°C.
+      required: false
+      example: 0.8
+      selector:
+        number:
+          min: 0.1
+          max: 5.0
+          step: 0.1
+          unit_of_measurement: "kW/°C"
+    heat_pump_cop_nominal:
+      name: Heat Pump Nominal COP
+      description: >-
+        Nominal COP of the heat pump at 7°C outdoor temperature.
+      required: false
+      example: 3.5
+      selector:
+        number:
+          min: 1.5
+          max: 6.0
+          step: 0.1

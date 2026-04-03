@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Heat Pump Optimizer Setup",
+        "description": "Configure your heat pump optimizer. You need a Tibber API token (get one at https://developer.tibber.com) and a weather entity.",
+        "data": {
+          "name": "Integration name",
+          "tibber_token": "Tibber API token",
+          "weather_entity": "Weather entity (for forecasts)",
+          "indoor_temp_entity": "Indoor temperature sensor (optional)",
+          "outdoor_temp_entity": "Outdoor temperature sensor (optional)",
+          "heat_pump_entity": "Heat pump climate entity (optional)",
+          "heat_pump_switch_entity": "Heat pump switch entity (optional)"
+        }
+      },
+      "temperature": {
+        "title": "Temperature Settings",
+        "description": "Configure your desired temperature range and comfort settings.",
+        "data": {
+          "target_temperature": "Target temperature",
+          "min_temperature": "Minimum allowed temperature",
+          "max_temperature": "Maximum allowed temperature",
+          "comfort_temp_day": "Daytime comfort temperature",
+          "comfort_temp_night": "Nighttime comfort temperature",
+          "day_start_hour": "Day starts at (hour)",
+          "day_end_hour": "Day ends at (hour)"
+        }
+      },
+      "thermal": {
+        "title": "Thermal Model & Optimization",
+        "description": "Configure your house's thermal properties and heat pump. Default values work for a typical well-insulated Scandinavian house with slab floor heating. Adjust if needed.",
+        "data": {
+          "house_thermal_mass": "House thermal mass (kWh/°C)",
+          "house_heat_loss_coefficient": "Heat loss coefficient (kW/°C)",
+          "slab_thermal_mass": "Slab floor thermal mass (kWh/°C)",
+          "slab_heat_transfer": "Slab-to-room heat transfer (kW/°C)",
+          "heat_pump_cop_nominal": "Heat pump nominal COP",
+          "heat_pump_max_power": "Heat pump max power (kW)",
+          "heat_pump_min_power": "Heat pump min power (kW)",
+          "optimization_interval": "Optimization interval (min)",
+          "price_weight": "Price weight",
+          "comfort_weight": "Comfort weight"
+        }
+      }
+    },
+    "error": {
+      "invalid_tibber_token": "Invalid Tibber API token. Please check and try again."
+    },
+    "abort": {
+      "already_configured": "This integration is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Heat Pump Optimizer Options",
+        "description": "Adjust temperature targets and optimization weights.",
+        "data": {
+          "target_temperature": "Target temperature (°C)",
+          "min_temperature": "Minimum temperature (°C)",
+          "max_temperature": "Maximum temperature (°C)",
+          "price_weight": "Price weight",
+          "comfort_weight": "Comfort weight",
+          "optimization_interval": "Optimization interval (min)"
+        }
+      }
+    }
+  }
+}

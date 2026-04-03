@@ -1,0 +1,6 @@
+{
+  "name": "Heat Pump Cost Optimizer",
+  "render_readme": true,
+  "domains": ["sensor", "climate", "switch"],
+  "homeassistant": "2024.1.0"
+}
