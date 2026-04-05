@@ -61,6 +61,12 @@ SERVICE_SCHEMA_SET_THERMAL_PARAMS = vol.Schema(
         vol.Optional("slab_thermal_mass"): vol.Coerce(float),
         vol.Optional("slab_heat_transfer"): vol.Coerce(float),
         vol.Optional("heat_pump_cop_nominal"): vol.Coerce(float),
+        vol.Optional("upper_floor_thermal_mass"): vol.Coerce(float),
+        vol.Optional("lower_floor_thermal_mass"): vol.Coerce(float),
+        vol.Optional("inter_zone_heat_transfer"): vol.Coerce(float),
+        vol.Optional("radiator_power_fraction"): vol.Coerce(float),
+        vol.Optional("window_area"): vol.Coerce(float),
+        vol.Optional("solar_heat_gain_coefficient"): vol.Coerce(float),
     }
 )
 

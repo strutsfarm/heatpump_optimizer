@@ -5,6 +5,7 @@ over the heat pump. Users can use this to:
 - Set target temperature
 - Switch between optimization modes (auto, comfort, economy, off, boost)
 - View current state and optimizer recommendations
+- See both zone temperatures in attributes (two-zone mode)
 """
 from __future__ import annotations
 
@@ -97,7 +98,9 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
         self._attr_unique_id = f"{entry.entry_id}_climate"
         self._attr_min_temp = self._config.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP) - 1
         self._attr_max_temp = self._config.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP) + 1
-        self._target_temperature = self._config.get(CONF_TARGET_TEMP, DEFAULT_TARGET_TEMP)
+        self._target_temperature = self._config.get(
+            CONF_TARGET_TEMP, DEFAULT_TARGET_TEMP
+        )
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -106,13 +109,13 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
             identifiers={(DOMAIN, self._entry.entry_id)},
             name="Heat Pump Optimizer",
             manufacturer="Custom",
-            model="MPC Optimizer v1.0",
-            sw_version="1.0.0",
+            model="MPC Optimizer v2.0",
+            sw_version="2.0.0",
         )
 
     @property
     def current_temperature(self) -> float | None:
-        """Return the current indoor temperature."""
+        """Return the current indoor temperature (weighted avg for two-zone)."""
         if self.coordinator.data:
             return self.coordinator.data.get("indoor_temperature")
         return None
@@ -129,7 +132,6 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def hvac_mode(self) -> HVACMode:
-        """Return the current HVAC mode."""
         if self.coordinator.data:
             mode = self.coordinator.data.get("mode", MODE_AUTO)
             return MODE_TO_HVAC.get(mode, HVACMode.AUTO)
@@ -137,7 +139,6 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def hvac_action(self) -> HVACAction | None:
-        """Return the current HVAC action."""
         if self.coordinator.data:
             action = self.coordinator.data.get("current_action", {})
             power_norm = action.get("power_normalized", 0)
@@ -152,15 +153,13 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
 
     @property
     def preset_mode(self) -> str | None:
-        """Return the current preset mode."""
         if self.coordinator.data:
-            mode = self.coordinator.data.get("mode", MODE_AUTO)
-            return mode
+            return self.coordinator.data.get("mode", MODE_AUTO)
         return PRESET_AUTO
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return extra state attributes."""
+        """Return extra state attributes including two-zone info."""
         attrs = {}
         if self.coordinator.data:
             action = self.coordinator.data.get("current_action", {})
@@ -168,14 +167,46 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
             attrs["recommended_power_kw"] = action.get("power")
             attrs["current_price"] = self.coordinator.data.get("current_price")
             attrs["predicted_savings"] = self.coordinator.data.get("predicted_savings")
-            attrs["savings_percentage"] = self.coordinator.data.get("savings_percentage")
-            attrs["optimization_status"] = self.coordinator.data.get("optimization_status")
+            attrs["savings_percentage"] = self.coordinator.data.get(
+                "savings_percentage"
+            )
+            attrs["optimization_status"] = self.coordinator.data.get(
+                "optimization_status"
+            )
             attrs["slab_temperature"] = self.coordinator.data.get("slab_temperature")
-            attrs["outdoor_temperature"] = self.coordinator.data.get("outdoor_temperature")
+            attrs["outdoor_temperature"] = self.coordinator.data.get(
+                "outdoor_temperature"
+            )
+
+            # Two-zone attributes
+            attrs["two_zone_enabled"] = self.coordinator.data.get(
+                "two_zone_enabled", False
+            )
+            attrs["upper_floor_temperature"] = self.coordinator.data.get(
+                "upper_floor_temperature"
+            )
+            attrs["lower_floor_temperature"] = self.coordinator.data.get(
+                "lower_floor_temperature"
+            )
+            attrs["floor_return_temperature"] = self.coordinator.data.get(
+                "floor_return_temperature"
+            )
+            attrs["solar_heat_gain_kw"] = self.coordinator.data.get(
+                "solar_heat_gain"
+            )
+            attrs["solar_radiation_wm2"] = self.coordinator.data.get(
+                "solar_radiation"
+            )
+
+            # Zone setpoints from current action
+            if "upper_setpoint" in action:
+                attrs["upper_floor_setpoint"] = action["upper_setpoint"]
+            if "lower_setpoint" in action:
+                attrs["lower_floor_setpoint"] = action["lower_setpoint"]
+
         return attrs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
-        """Set HVAC mode."""
         if hvac_mode == HVACMode.OFF:
             await self.coordinator.async_set_mode(MODE_OFF)
         elif hvac_mode == HVACMode.AUTO:
@@ -184,7 +215,6 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
             await self.coordinator.async_set_mode(MODE_COMFORT)
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
-        """Set target temperature."""
         temp = kwargs.get(ATTR_TEMPERATURE)
         if temp is not None:
             self._target_temperature = temp
@@ -193,7 +223,6 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
             await self.coordinator.async_request_refresh()
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
-        """Set preset mode."""
         mode_map = {
             PRESET_AUTO: MODE_AUTO,
             PRESET_COMFORT: MODE_COMFORT,
@@ -204,9 +233,7 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
         await self.coordinator.async_set_mode(mode)
 
     async def async_turn_on(self) -> None:
-        """Turn on."""
         await self.coordinator.async_set_mode(MODE_AUTO)
 
     async def async_turn_off(self) -> None:
-        """Turn off."""
         await self.coordinator.async_set_mode(MODE_OFF)

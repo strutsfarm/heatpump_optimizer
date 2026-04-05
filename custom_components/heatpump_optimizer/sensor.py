@@ -54,6 +54,13 @@ async def async_setup_entry(
         LastOptimizationSensor(coordinator, entry),
         HeatPumpActionSensor(coordinator, entry),
         ScheduleSensor(coordinator, entry),
+        # Two-zone sensors
+        UpperFloorTempSensor(coordinator, entry),
+        LowerFloorTempSensor(coordinator, entry),
+        FloorReturnTempSensor(coordinator, entry),
+        SolarRadiationSensor(coordinator, entry),
+        SolarHeatGainSensor(coordinator, entry),
+        BufferTankTempSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -85,9 +92,14 @@ class HeatPumpOptimizerSensorBase(CoordinatorEntity, SensorEntity):
             identifiers={(DOMAIN, self._entry.entry_id)},
             name="Heat Pump Optimizer",
             manufacturer="Custom",
-            model="MPC Optimizer v1.0",
-            sw_version="1.0.0",
+            model="MPC Optimizer v2.0",
+            sw_version="2.0.0",
         )
+
+
+# ---------------------------------------------------------------------------
+# Original sensors (maintained for backward compatibility)
+# ---------------------------------------------------------------------------
 
 
 class OptimizationModeSensor(HeatPumpOptimizerSensorBase):
@@ -128,16 +140,15 @@ class OptimizationStatusSensor(HeatPumpOptimizerSensorBase):
                 "weather_forecast_available": self.coordinator.data.get(
                     "weather_forecast_available", 0
                 ),
+                "two_zone_enabled": self.coordinator.data.get("two_zone_enabled", False),
             }
         return {}
 
 
 class PredictedSavingsSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing predicted cost savings."""
-
     _attr_icon = "mdi:piggy-bank-outline"
     _attr_state_class = SensorStateClass.MEASUREMENT
-    _attr_native_unit_of_measurement = "SEK"  # Swedish Krona / adapt to your currency
+    _attr_native_unit_of_measurement = "SEK"
 
     def __init__(self, coordinator, entry):
         super().__init__(coordinator, entry, "predicted_savings", "Predicted Savings")
@@ -151,8 +162,6 @@ class PredictedSavingsSensor(HeatPumpOptimizerSensorBase):
 
 
 class SavingsPercentageSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing savings as a percentage."""
-
     _attr_icon = "mdi:percent"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = PERCENTAGE
@@ -169,8 +178,6 @@ class SavingsPercentageSensor(HeatPumpOptimizerSensorBase):
 
 
 class PredictedCostSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing predicted optimized cost."""
-
     _attr_icon = "mdi:currency-usd"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "SEK"
@@ -187,8 +194,6 @@ class PredictedCostSensor(HeatPumpOptimizerSensorBase):
 
 
 class BaselineCostSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing baseline (non-optimized) cost."""
-
     _attr_icon = "mdi:currency-usd-off"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "SEK"
@@ -205,8 +210,6 @@ class BaselineCostSensor(HeatPumpOptimizerSensorBase):
 
 
 class CurrentPriceSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing current electricity price."""
-
     _attr_icon = "mdi:flash"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "SEK/kWh"
@@ -224,8 +227,6 @@ class CurrentPriceSensor(HeatPumpOptimizerSensorBase):
 
 
 class CurrentSetpointSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing the current optimal setpoint."""
-
     _attr_icon = "mdi:thermometer"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -241,10 +242,20 @@ class CurrentSetpointSensor(HeatPumpOptimizerSensorBase):
             return action.get("setpoint")
         return None
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data:
+            action = self.coordinator.data.get("current_action", {})
+            attrs = {}
+            if "upper_setpoint" in action:
+                attrs["upper_floor_setpoint"] = action["upper_setpoint"]
+            if "lower_setpoint" in action:
+                attrs["lower_floor_setpoint"] = action["lower_setpoint"]
+            return attrs
+        return {}
+
 
 class CurrentPowerSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing the current recommended power."""
-
     _attr_icon = "mdi:lightning-bolt"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
@@ -263,8 +274,6 @@ class CurrentPowerSensor(HeatPumpOptimizerSensorBase):
 
 
 class CurrentCOPSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing the current estimated COP."""
-
     _attr_icon = "mdi:gauge"
     _attr_state_class = SensorStateClass.MEASUREMENT
 
@@ -281,8 +290,6 @@ class CurrentCOPSensor(HeatPumpOptimizerSensorBase):
 
 
 class IndoorTempSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing indoor temperature used by optimizer."""
-
     _attr_icon = "mdi:home-thermometer"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -300,8 +307,6 @@ class IndoorTempSensor(HeatPumpOptimizerSensorBase):
 
 
 class OutdoorTempSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing outdoor temperature used by optimizer."""
-
     _attr_icon = "mdi:thermometer"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -319,8 +324,6 @@ class OutdoorTempSensor(HeatPumpOptimizerSensorBase):
 
 
 class SlabTempSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing estimated slab floor temperature."""
-
     _attr_icon = "mdi:floor-plan"
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -338,8 +341,6 @@ class SlabTempSensor(HeatPumpOptimizerSensorBase):
 
 
 class NextOptimizationSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing when the next optimization will run."""
-
     _attr_icon = "mdi:clock-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -354,8 +355,6 @@ class NextOptimizationSensor(HeatPumpOptimizerSensorBase):
 
 
 class LastOptimizationSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing when the last optimization ran."""
-
     _attr_icon = "mdi:clock-check-outline"
     _attr_device_class = SensorDeviceClass.TIMESTAMP
 
@@ -370,8 +369,6 @@ class LastOptimizationSensor(HeatPumpOptimizerSensorBase):
 
 
 class HeatPumpActionSensor(HeatPumpOptimizerSensorBase):
-    """Sensor showing the current heat pump action/recommendation."""
-
     _attr_icon = "mdi:heat-pump"
 
     def __init__(self, coordinator, entry):
@@ -388,18 +385,23 @@ class HeatPumpActionSensor(HeatPumpOptimizerSensorBase):
     def extra_state_attributes(self) -> dict[str, Any]:
         if self.coordinator.data:
             action = self.coordinator.data.get("current_action", {})
-            return {
+            attrs = {
                 "power_kw": action.get("power"),
                 "setpoint": action.get("setpoint"),
                 "price": action.get("price"),
                 "power_normalized": action.get("power_normalized"),
             }
+            if "upper_setpoint" in action:
+                attrs["upper_floor_setpoint"] = action["upper_setpoint"]
+            if "lower_setpoint" in action:
+                attrs["lower_floor_setpoint"] = action["lower_setpoint"]
+            if "solar_gain_kw" in action:
+                attrs["solar_gain_kw"] = action["solar_gain_kw"]
+            return attrs
         return {}
 
 
 class ScheduleSensor(HeatPumpOptimizerSensorBase):
-    """Sensor containing the optimization schedule as attributes."""
-
     _attr_icon = "mdi:calendar-clock"
 
     def __init__(self, coordinator, entry):
@@ -419,3 +421,145 @@ class ScheduleSensor(HeatPumpOptimizerSensorBase):
                 "schedule": self.coordinator.data.get("schedule", []),
             }
         return {}
+
+
+# ---------------------------------------------------------------------------
+# New two-zone and solar sensors
+# ---------------------------------------------------------------------------
+
+
+class UpperFloorTempSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing upper floor (radiator zone) temperature."""
+
+    _attr_icon = "mdi:home-floor-1"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "upper_floor_temp", "Upper Floor Temperature"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("upper_floor_temperature")
+            return round(val, 1) if val is not None else None
+        return None
+
+
+class LowerFloorTempSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing lower floor (slab/floor heating zone) temperature."""
+
+    _attr_icon = "mdi:home-floor-0"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "lower_floor_temp", "Lower Floor Temperature"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("lower_floor_temperature")
+            return round(val, 1) if val is not None else None
+        return None
+
+
+class FloorReturnTempSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing the floor heating return temperature (from real sensor)."""
+
+    _attr_icon = "mdi:pipe-valve"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "floor_return_temp", "Floor Heating Return Temperature"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("floor_return_temperature")
+            return round(val, 1) if val is not None else None
+        return None
+
+
+class SolarRadiationSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing the current solar radiation used by optimizer."""
+
+    _attr_icon = "mdi:white-balance-sunny"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "W/m²"
+    _attr_device_class = SensorDeviceClass.IRRADIANCE
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "solar_radiation", "Solar Radiation (Optimizer)"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("solar_radiation")
+            return round(val, 0) if val is not None else None
+        return None
+
+
+class SolarHeatGainSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing the current solar heat gain contribution in kW."""
+
+    _attr_icon = "mdi:solar-power"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfPower.KILO_WATT
+    _attr_device_class = SensorDeviceClass.POWER
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "solar_heat_gain", "Solar Heat Gain"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("solar_heat_gain")
+            return round(val, 3) if val is not None else None
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data:
+            return {
+                "solar_radiation_wm2": self.coordinator.data.get("solar_radiation", 0),
+                "window_area_m2": self.coordinator._thermal_params.window_area,
+                "shgc": self.coordinator._thermal_params.solar_heat_gain_coefficient,
+                "orientation_factor": self.coordinator._thermal_params.solar_orientation_factor,
+            }
+        return {}
+
+
+class BufferTankTempSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing the modeled buffer tank temperature."""
+
+    _attr_icon = "mdi:water-boiler"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "buffer_tank_temp", "Buffer Tank Temperature (Model)"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("buffer_tank_temperature")
+            return round(val, 1) if val is not None else None
+        return None

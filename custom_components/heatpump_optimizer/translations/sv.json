@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Värmepumpsoptimering - Konfiguration",
-        "description": "Konfigurera din värmepumpsoptimering. Du behöver en Tibber API-nyckel (hämta på https://developer.tibber.com) och en väderentitet.",
+        "description": "Konfigurera din värmepumpsoptimering. Du behöver en Tibber API-nyckel (hämta på https://developer.tibber.com) och en väderentitet. Valfritt: lägg till solstrålnings- och golvvärme-returtemperatursensorer för den utökade tvåzonsmodellen.",
         "data": {
           "name": "Integrationsnamn",
           "tibber_token": "Tibber API-nyckel",
@@ -11,7 +11,9 @@
           "indoor_temp_entity": "Inomhustemperatursensor (valfritt)",
           "outdoor_temp_entity": "Utomhustemperatursensor (valfritt)",
           "heat_pump_entity": "Värmepump klimatentitet (valfritt)",
-          "heat_pump_switch_entity": "Värmepump strömbrytare (valfritt)"
+          "heat_pump_switch_entity": "Värmepump strömbrytare (valfritt)",
+          "solar_radiation_entity": "Solstrålningssensor (valfritt, W/m²)",
+          "floor_return_temp_entity": "Golvvärme returtemperatursensor (valfritt)"
         }
       },
       "temperature": {
@@ -42,6 +44,23 @@
           "price_weight": "Prisvikt",
           "comfort_weight": "Komfortvikt"
         }
+      },
+      "zones": {
+        "title": "Tvåzons- & Solkonfiguration",
+        "description": "Valfritt: Konfigurera tvåzonsuppvärmning (övervåning radiatorer + nedervåning golvvärme) och parametrar för solvärme. Lämna standardvärden om du inte behöver tvåzonsmodellen.",
+        "data": {
+          "upper_floor_thermal_mass": "Övervåning termisk massa (kWh/°C)",
+          "lower_floor_thermal_mass": "Nedervåning termisk massa (kWh/°C)",
+          "upper_floor_heat_loss": "Övervåning värmeförlust (kW/°C)",
+          "lower_floor_heat_loss": "Nedervåning värmeförlust (kW/°C)",
+          "inter_zone_heat_transfer": "Värmeöverföring mellan zoner (kW/°C)",
+          "radiator_power_fraction": "Radiatoreffektandel",
+          "upper_floor_area_ratio": "Övervåning ytförhållande",
+          "buffer_tank_volume": "Buffertankvolym (L)",
+          "window_area": "Fönsterarea (m²)",
+          "solar_orientation_factor": "Solorientering (1.0=full söder)",
+          "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)"
+        }
       }
     },
     "error": {
@@ -55,14 +74,17 @@
     "step": {
       "init": {
         "title": "Värmepumpsoptimering - Alternativ",
-        "description": "Justera temperaturmål och optimeringsvikter.",
+        "description": "Justera temperaturmål, optimeringsvikter och zon-/solparametrar.",
         "data": {
           "target_temperature": "Måltemperatur (°C)",
           "min_temperature": "Lägsta temperatur (°C)",
           "max_temperature": "Högsta temperatur (°C)",
           "price_weight": "Prisvikt",
           "comfort_weight": "Komfortvikt",
-          "optimization_interval": "Optimeringsintervall (min)"
+          "optimization_interval": "Optimeringsintervall (min)",
+          "radiator_power_fraction": "Radiatoreffektandel",
+          "window_area": "Fönsterarea (m²)",
+          "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)"
         }
       }
     }

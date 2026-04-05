@@ -4,15 +4,20 @@ This module implements an MPC-based optimizer that determines the optimal
 heat pump power schedule over a 24-hour horizon to minimize electricity costs
 while maintaining indoor temperature within comfort bounds.
 
+Enhanced for two-zone operation:
+  - Zone 1 (Upper Floor): Radiator heating — fast response
+  - Zone 2 (Lower Floor): Slab floor heating — slow response
+  - Solar gains included in heat balance
+  - Buffer tank dynamics considered
+
 The optimization problem is:
 
-    minimize   Σ price[k] * P_el[k] * dt + comfort_weight * Σ penalty[k]
-    subject to T_min[k] ≤ T_room[k] ≤ T_max[k]  (soft constraints with penalty)
+    minimize   Σ price[k] * P_el[k] * dt
+             + comfort_weight * Σ penalty_upper[k]
+             + comfort_weight * Σ penalty_lower[k]
+    subject to T_min ≤ T_upper[k], T_lower[k] ≤ T_max  (soft)
                P_min ≤ P_el[k] ≤ P_max
-               Thermal dynamics (state-space model)
-
-The solver uses scipy.optimize.minimize with the L-BFGS-B method, which
-handles box constraints efficiently.
+               Thermal dynamics (two-zone state model)
 """
 from __future__ import annotations
 
@@ -22,7 +27,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 import numpy as np
-from scipy.optimize import minimize, LinearConstraint
+from scipy.optimize import minimize
 
 from .thermal_model import ThermalModel, ThermalParameters, ThermalState
 
@@ -34,7 +39,7 @@ class OptimizationResult:
     """Result of the MPC optimization."""
 
     power_schedule: list[float]  # kW electrical per time step
-    room_temp_trajectory: list[float]  # °C predicted room temp
+    room_temp_trajectory: list[float]  # °C predicted avg room temp
     slab_temp_trajectory: list[float]  # °C predicted slab temp
     timestamps: list[datetime]  # timestamp for each step
     prices: list[float]  # electricity price per step
@@ -44,7 +49,14 @@ class OptimizationResult:
     savings_percentage: float  # savings as percentage
     optimal_setpoints: list[float]  # recommended setpoints per step
     status: str  # optimization status
-    solve_time_ms: float = 0.0  # solver time in milliseconds
+    solve_time_ms: float = 0.0
+
+    # Two-zone trajectories
+    upper_temp_trajectory: list[float] = field(default_factory=list)
+    lower_temp_trajectory: list[float] = field(default_factory=list)
+    solar_gain_trajectory: list[float] = field(default_factory=list)
+    upper_setpoints: list[float] = field(default_factory=list)
+    lower_setpoints: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -84,15 +96,13 @@ class OptimizationConfig:
 
     def get_temp_bounds(self, hour: float) -> tuple[float, float]:
         """Get temperature bounds for a given hour."""
-        comfort = self.get_comfort_temp(hour)
-        # Allow wider range during night
         if self.day_start_hour <= hour < self.day_end_hour:
             return (self.min_temp, self.max_temp)
         return (self.min_temp - 0.5, self.max_temp)
 
 
 class HeatPumpOptimizer:
-    """MPC-based heat pump cost optimizer."""
+    """MPC-based heat pump cost optimizer with two-zone support."""
 
     def __init__(
         self,
@@ -110,6 +120,7 @@ class HeatPumpOptimizer:
         outdoor_temps: np.ndarray,
         wind_speeds: np.ndarray | None = None,
         precipitation: np.ndarray | None = None,
+        solar_radiation: np.ndarray | None = None,
         start_time: datetime | None = None,
     ) -> OptimizationResult:
         """Run the MPC optimization.
@@ -117,9 +128,10 @@ class HeatPumpOptimizer:
         Args:
             initial_state: Current thermal state of the house
             prices: Electricity prices (currency/kWh) for each time step
-            outdoor_temps: Outdoor temperature forecast (°C) for each time step
+            outdoor_temps: Outdoor temperature forecast (°C)
             wind_speeds: Wind speed forecast (m/s), optional
             precipitation: Precipitation forecast (mm/h), optional
+            solar_radiation: Solar radiation forecast (W/m²), optional
             start_time: Start time of the optimization horizon
 
         Returns:
@@ -136,6 +148,8 @@ class HeatPumpOptimizer:
             wind_speeds = np.zeros(n_steps)
         if precipitation is None:
             precipitation = np.zeros(n_steps)
+        if solar_radiation is None:
+            solar_radiation = np.zeros(n_steps)
 
         if start_time is None:
             start_time = datetime.now()
@@ -145,10 +159,11 @@ class HeatPumpOptimizer:
         outdoor_temps = outdoor_temps[:n_steps]
         wind_speeds = wind_speeds[:n_steps]
         precipitation = precipitation[:n_steps]
+        solar_radiation = solar_radiation[:n_steps]
 
         _LOGGER.debug(
-            "Starting optimization: %d steps, dt=%.2fh, horizon=%.1fh",
-            n_steps, dt, n_steps * dt,
+            "Starting optimization: %d steps, dt=%.2fh, horizon=%.1fh, two_zone=%s",
+            n_steps, dt, n_steps * dt, self.model.params.two_zone_enabled,
         )
 
         # Compute comfort targets for each time step
@@ -178,71 +193,81 @@ class HeatPumpOptimizer:
 
         p_min = self.model.params.min_electrical_power
         p_max = self.model.params.max_electrical_power
+        two_zone = self.model.params.two_zone_enabled
 
         def objective(power_schedule: np.ndarray) -> float:
-            """Compute the total cost objective function.
-
-            Cost = Σ price[k] * P_el[k] * dt  (electricity cost)
-                 + comfort_weight * Σ max(0, T_min[k] - T_room[k])²  (undershoot penalty)
-                 + comfort_weight * Σ max(0, T_room[k] - T_max[k])²  (overshoot penalty)
-                 + 0.1 * comfort_weight * Σ (T_room[k] - comfort_target[k])²  (comfort tracking)
-            """
-            room_temps, _ = self.model.simulate_trajectory(
-                initial_state=initial_state,
-                power_schedule=power_schedule,
-                outdoor_temps=outdoor_temps,
-                wind_speeds=wind_speeds,
-                precipitation=precipitation,
-                dt_hours=dt,
+            """Compute the total cost objective."""
+            room_temps, slab_temps, upper_temps, lower_temps = (
+                self.model.simulate_trajectory(
+                    initial_state=initial_state,
+                    power_schedule=power_schedule,
+                    outdoor_temps=outdoor_temps,
+                    wind_speeds=wind_speeds,
+                    precipitation=precipitation,
+                    solar_radiation=solar_radiation,
+                    dt_hours=dt,
+                )
             )
 
             # Electricity cost
-            energy_cost = np.sum(prices * power_schedule * dt) * self.config.price_weight
-
-            # Temperature constraint violations (soft constraints)
-            room_t = room_temps[1:]  # skip initial state
-            undershoot = np.maximum(0, temp_min_bounds - room_t)
-            overshoot = np.maximum(0, room_t - temp_max_bounds)
-
-            penalty = self.config.comfort_weight * (
-                np.sum(undershoot ** 2) * 10.0  # heavy penalty for too cold
-                + np.sum(overshoot ** 2) * 5.0  # moderate penalty for too warm
+            energy_cost = (
+                np.sum(prices * power_schedule * dt) * self.config.price_weight
             )
 
-            # Comfort tracking (gentle pull toward comfort target)
-            comfort_deviation = room_t - comfort_targets
-            comfort_cost = 0.05 * self.config.comfort_weight * np.sum(comfort_deviation ** 2)
+            if two_zone:
+                # Penalize both zones
+                upper_t = upper_temps[1:]
+                lower_t = lower_temps[1:]
 
-            # Smoothness penalty to avoid rapid on/off cycling
+                undershoot_u = np.maximum(0, temp_min_bounds - upper_t)
+                overshoot_u = np.maximum(0, upper_t - temp_max_bounds)
+                undershoot_l = np.maximum(0, temp_min_bounds - lower_t)
+                overshoot_l = np.maximum(0, lower_t - temp_max_bounds)
+
+                penalty = self.config.comfort_weight * (
+                    np.sum(undershoot_u ** 2) * 10.0
+                    + np.sum(overshoot_u ** 2) * 5.0
+                    + np.sum(undershoot_l ** 2) * 10.0
+                    + np.sum(overshoot_l ** 2) * 5.0
+                )
+
+                # Comfort tracking for both zones
+                comfort_dev_u = upper_t - comfort_targets
+                comfort_dev_l = lower_t - comfort_targets
+                comfort_cost = 0.05 * self.config.comfort_weight * (
+                    np.sum(comfort_dev_u ** 2) + np.sum(comfort_dev_l ** 2)
+                )
+            else:
+                # Single-zone penalty
+                room_t = room_temps[1:]
+                undershoot = np.maximum(0, temp_min_bounds - room_t)
+                overshoot = np.maximum(0, room_t - temp_max_bounds)
+
+                penalty = self.config.comfort_weight * (
+                    np.sum(undershoot ** 2) * 10.0
+                    + np.sum(overshoot ** 2) * 5.0
+                )
+
+                comfort_deviation = room_t - comfort_targets
+                comfort_cost = 0.05 * self.config.comfort_weight * np.sum(
+                    comfort_deviation ** 2
+                )
+
+            # Smoothness penalty
             if len(power_schedule) > 1:
                 smoothness = 0.01 * np.sum(np.diff(power_schedule) ** 2)
             else:
                 smoothness = 0.0
 
-            total = energy_cost + penalty + comfort_cost + smoothness
-            return total
+            return energy_cost + penalty + comfort_cost + smoothness
 
-        def objective_gradient(power_schedule: np.ndarray) -> np.ndarray:
-            """Compute gradient using finite differences."""
-            grad = np.zeros_like(power_schedule)
-            eps = 0.01  # kW perturbation
-            f0 = objective(power_schedule)
-            for i in range(len(power_schedule)):
-                power_schedule[i] += eps
-                f1 = objective(power_schedule)
-                grad[i] = (f1 - f0) / eps
-                power_schedule[i] -= eps
-            return grad
-
-        # Initial guess: proportional to price inverse (heat more when cheap)
+        # Initial guess: proportional to price inverse
         price_normalized = prices / (np.mean(prices) + 1e-6)
         initial_power = p_max * np.clip(1.5 - price_normalized, 0.2, 1.0)
         initial_power = np.clip(initial_power, p_min, p_max)
 
-        # Bounds for each power value
         bounds = [(p_min, p_max)] * n_steps
 
-        # Optimize using L-BFGS-B
         try:
             result = minimize(
                 objective,
@@ -263,33 +288,58 @@ class HeatPumpOptimizer:
             status = f"failed ({e})"
 
         # Simulate with optimal schedule
-        room_temps, slab_temps = self.model.simulate_trajectory(
-            initial_state=initial_state,
-            power_schedule=optimal_power,
-            outdoor_temps=outdoor_temps,
-            wind_speeds=wind_speeds,
-            precipitation=precipitation,
-            dt_hours=dt,
+        room_temps, slab_temps, upper_temps, lower_temps = (
+            self.model.simulate_trajectory(
+                initial_state=initial_state,
+                power_schedule=optimal_power,
+                outdoor_temps=outdoor_temps,
+                wind_speeds=wind_speeds,
+                precipitation=precipitation,
+                solar_radiation=solar_radiation,
+                dt_hours=dt,
+            )
         )
 
-        # Compute baseline cost (constant power to maintain target temp)
+        # Compute solar gains for output
+        solar_gains = [
+            self.model.compute_solar_gain(sr) for sr in solar_radiation
+        ]
+
+        # Compute baseline cost
         baseline_power = self._compute_baseline_power(
-            initial_state, outdoor_temps, wind_speeds, precipitation, dt
+            initial_state, outdoor_temps, wind_speeds, precipitation,
+            solar_radiation, dt,
         )
         baseline_cost = float(np.sum(prices * baseline_power * dt))
         predicted_cost = float(np.sum(prices * optimal_power * dt))
         savings = baseline_cost - predicted_cost
 
-        # Generate timestamps
         timestamps = [
-            start_time + timedelta(hours=i * dt)
-            for i in range(n_steps)
+            start_time + timedelta(hours=i * dt) for i in range(n_steps)
         ]
 
-        # Convert optimal power to setpoint recommendations
+        # Setpoints
         optimal_setpoints = self._power_to_setpoints(
             optimal_power, room_temps[:-1], outdoor_temps
         )
+
+        # Per-zone setpoints (for two-zone mode)
+        upper_setpoints = []
+        lower_setpoints = []
+        if two_zone:
+            for i, power in enumerate(optimal_power):
+                p_norm = (power - p_min) / max(p_max - p_min, 0.1)
+                p_norm = np.clip(p_norm, 0, 1)
+                # Upper floor (radiators): more responsive → tighter setpoint
+                upper_sp = self.config.min_temp + p_norm * (
+                    self.config.max_temp - self.config.min_temp
+                )
+                # Lower floor (slab): pre-heat more aggressively
+                lower_sp = self.config.min_temp + p_norm * (
+                    self.config.max_temp - self.config.min_temp + 1.0
+                )
+                upper_setpoints.append(round(float(upper_sp), 1))
+                lower_setpoints.append(round(float(lower_sp), 1))
 
         t_elapsed = (time.monotonic() - t_start) * 1000
 
@@ -310,10 +360,17 @@ class HeatPumpOptimizer:
             predicted_cost=predicted_cost,
             baseline_cost=baseline_cost,
             predicted_savings=savings,
-            savings_percentage=(savings / baseline_cost * 100) if baseline_cost > 0 else 0,
+            savings_percentage=(
+                (savings / baseline_cost * 100) if baseline_cost > 0 else 0
+            ),
             optimal_setpoints=optimal_setpoints,
             status=status,
             solve_time_ms=t_elapsed,
+            upper_temp_trajectory=upper_temps.tolist(),
+            lower_temp_trajectory=lower_temps.tolist(),
+            solar_gain_trajectory=solar_gains,
+            upper_setpoints=upper_setpoints,
+            lower_setpoints=lower_setpoints,
         )
 
     def _compute_baseline_power(
@@ -322,42 +379,38 @@ class HeatPumpOptimizer:
         outdoor_temps: np.ndarray,
         wind_speeds: np.ndarray,
         precipitation: np.ndarray,
+        solar_radiation: np.ndarray,
         dt: float,
     ) -> np.ndarray:
-        """Compute baseline power schedule (constant temperature strategy).
-
-        This represents the "naive" strategy of maintaining a constant
-        temperature without any price optimization.
-        """
+        """Compute baseline power schedule (constant temperature strategy)."""
         n_steps = len(outdoor_temps)
         target = self.config.target_temp
         p = self.model.params
 
-        # Simple proportional control baseline
         baseline_power = np.zeros(n_steps)
         state = initial_state
 
         for i in range(n_steps):
-            # Heat loss at current conditions
             u_eff = self.model.effective_heat_loss_coefficient(
                 wind_speeds[i], precipitation[i]
             )
             heat_loss = u_eff * (state.room_temperature - outdoor_temps[i])
             cop = self.model.compute_cop(outdoor_temps[i])
+            q_solar = self.model.compute_solar_gain(solar_radiation[i])
 
-            # Power needed to compensate heat loss
-            thermal_need = max(0, heat_loss - p.internal_gains)
-            # Add proportional correction for temperature error
+            thermal_need = max(0, heat_loss - p.internal_gains - q_solar)
             temp_error = target - state.room_temperature
             correction = p.slab_heat_transfer * temp_error * 0.5
 
             electrical_power = max(0, (thermal_need + correction) / cop)
-            electrical_power = np.clip(electrical_power, p.min_electrical_power, p.max_electrical_power)
+            electrical_power = np.clip(
+                electrical_power, p.min_electrical_power, p.max_electrical_power
+            )
             baseline_power[i] = electrical_power
 
             state = self.model.simulate_step(
                 state, electrical_power, outdoor_temps[i],
-                wind_speeds[i], precipitation[i], dt,
+                wind_speeds[i], precipitation[i], solar_radiation[i], dt,
             )
 
         return baseline_power
@@ -368,23 +421,20 @@ class HeatPumpOptimizer:
         room_temps: np.ndarray,
         outdoor_temps: np.ndarray,
     ) -> list[float]:
-        """Convert power schedule to equivalent temperature setpoints.
-
-        Maps the optimal power level to a displacement/setpoint value that
-        the heat pump controller can use.
-        """
+        """Convert power schedule to equivalent temperature setpoints."""
         setpoints = []
-        p_range = self.model.params.max_electrical_power - self.model.params.min_electrical_power
+        p_range = (
+            self.model.params.max_electrical_power
+            - self.model.params.min_electrical_power
+        )
 
         for i, (power, room_t) in enumerate(zip(power_schedule, room_temps)):
-            # Normalize power to 0-1 range
-            p_norm = (power - self.model.params.min_electrical_power) / max(p_range, 0.1)
+            p_norm = (
+                power - self.model.params.min_electrical_power
+            ) / max(p_range, 0.1)
             p_norm = np.clip(p_norm, 0, 1)
-
-            # Map to setpoint: higher power → higher setpoint displacement
             displacement = p_norm * (self.config.max_temp - self.config.min_temp)
             setpoint = self.config.min_temp + displacement
-
             setpoints.append(round(float(setpoint), 1))
 
         return setpoints
@@ -392,10 +442,7 @@ class HeatPumpOptimizer:
     def get_current_action(
         self, result: OptimizationResult, current_time: datetime
     ) -> dict[str, Any]:
-        """Get the current recommended action from the optimization result.
-
-        Returns the action (power, setpoint, mode) for the current time step.
-        """
+        """Get the current recommended action from the optimization result."""
         if not result.timestamps:
             return {
                 "power": self.model.params.min_electrical_power,
@@ -410,7 +457,6 @@ class HeatPumpOptimizer:
                 if ts <= current_time < result.timestamps[i + 1]:
                     break
             else:
-                # Last step
                 i = len(result.timestamps) - 1
                 break
 
@@ -418,9 +464,13 @@ class HeatPumpOptimizer:
         setpoint = result.optimal_setpoints[i]
         price = result.prices[i]
 
-        # Determine mode based on power level
-        p_range = self.model.params.max_electrical_power - self.model.params.min_electrical_power
-        p_norm = (power - self.model.params.min_electrical_power) / max(p_range, 0.1)
+        p_range = (
+            self.model.params.max_electrical_power
+            - self.model.params.min_electrical_power
+        )
+        p_norm = (
+            power - self.model.params.min_electrical_power
+        ) / max(p_range, 0.1)
 
         if p_norm < 0.1:
             mode = "off"
@@ -433,10 +483,22 @@ class HeatPumpOptimizer:
         else:
             mode = "boost"
 
-        return {
+        action = {
             "power": round(power, 2),
             "setpoint": setpoint,
             "mode": mode,
             "price": round(price, 4),
             "power_normalized": round(p_norm, 2),
         }
+
+        # Add zone-specific setpoints if available
+        if result.upper_setpoints and i < len(result.upper_setpoints):
+            action["upper_setpoint"] = result.upper_setpoints[i]
+        if result.lower_setpoints and i < len(result.lower_setpoints):
+            action["lower_setpoint"] = result.lower_setpoints[i]
+
+        # Add solar gain info
+        if result.solar_gain_trajectory and i < len(result.solar_gain_trajectory):
+            action["solar_gain_kw"] = round(result.solar_gain_trajectory[i], 3)
+
+        return action

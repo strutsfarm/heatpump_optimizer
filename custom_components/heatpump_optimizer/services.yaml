@@ -35,7 +35,7 @@ set_thermal_parameters:
   description: >-
     Update the thermal model parameters used by the optimizer.
     Useful for fine-tuning the model to match your house's actual
-    thermal behavior.
+    thermal behavior. Supports both single-zone and two-zone parameters.
   fields:
     house_thermal_mass:
       name: House Thermal Mass
@@ -98,3 +98,76 @@ set_thermal_parameters:
           min: 1.5
           max: 6.0
           step: 0.1
+    upper_floor_thermal_mass:
+      name: Upper Floor Thermal Mass
+      description: >-
+        Thermal mass of the upper floor (radiator zone) in kWh/°C.
+      required: false
+      example: 3.0
+      selector:
+        number:
+          min: 1
+          max: 20
+          step: 0.5
+          unit_of_measurement: "kWh/°C"
+    lower_floor_thermal_mass:
+      name: Lower Floor Thermal Mass
+      description: >-
+        Thermal mass of the lower floor (slab zone) in kWh/°C.
+      required: false
+      example: 8.0
+      selector:
+        number:
+          min: 1
+          max: 30
+          step: 0.5
+          unit_of_measurement: "kWh/°C"
+    inter_zone_heat_transfer:
+      name: Inter-Zone Heat Transfer
+      description: >-
+        Heat transfer coefficient between upper and lower floors in kW/°C.
+        Higher values for open floor plans.
+      required: false
+      example: 0.5
+      selector:
+        number:
+          min: 0.0
+          max: 3.0
+          step: 0.1
+          unit_of_measurement: "kW/°C"
+    radiator_power_fraction:
+      name: Radiator Power Fraction
+      description: >-
+        Fraction of heat pump output going to radiators (upper floor).
+        0.0 = all floor heating, 1.0 = all radiators.
+      required: false
+      example: 0.4
+      selector:
+        number:
+          min: 0.0
+          max: 1.0
+          step: 0.05
+    window_area:
+      name: Window Area
+      description: >-
+        Total glazing area for solar heat gain calculation in m².
+      required: false
+      example: 10.0
+      selector:
+        number:
+          min: 0
+          max: 50
+          step: 0.5
+          unit_of_measurement: "m²"
+    solar_heat_gain_coefficient:
+      name: Solar Heat Gain Coefficient (SHGC)
+      description: >-
+        Fraction of solar energy transmitted through windows.
+        Typical values: 0.3 (triple low-e) to 0.8 (single clear).
+      required: false
+      example: 0.7
+      selector:
+        number:
+          min: 0.1
+          max: 1.0
+          step: 0.05

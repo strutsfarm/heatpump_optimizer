@@ -1,208 +1,284 @@
-# 🔥 Heat Pump Cost Optimizer for Home Assistant
+# Heat Pump Cost Optimizer for Home Assistant
 
-A custom Home Assistant integration that optimizes air-to-water heat pump operation to **minimize electricity costs** using **Model Predictive Control (MPC)**. Designed for houses with **slab floor heating** (large thermal mass) and **Tibber** electricity pricing.
+A custom Home Assistant integration that uses **Model Predictive Control (MPC)** to optimize heat pump operation and minimize electricity costs, while maintaining indoor comfort. Integrates with **Tibber** for dynamic electricity prices and Home Assistant weather entities for temperature and solar forecasts.
 
-## ✨ Features
+## Features
 
-- **Smart Cost Optimization**: Uses MPC to find the optimal heating schedule over a 24-hour horizon
-- **Tibber Integration**: Fetches real-time and forecast electricity prices (15-minute resolution)
-- **Weather-Aware**: Uses weather forecasts to predict heat loss (temperature, wind, rain)
-- **Thermal Mass Exploitation**: Pre-heats during cheap periods, allows temperature drop during expensive periods
-- **COP Modeling**: Accounts for heat pump efficiency variation with outdoor temperature
-- **Slab Floor Modeling**: Two-node thermal model capturing the slow dynamics of concrete slab heating
-- **Multiple Modes**: Auto (full optimization), Comfort, Economy, Boost, and Off
-- **Rich Sensors**: 17 sensor entities for monitoring optimization performance
-- **Climate Entity**: Virtual thermostat with preset mode support
-- **Service Calls**: Manually trigger optimization, change modes, update thermal parameters
-- **Swedish Translation**: Full Swedish (sv) language support included
+- **MPC-based optimization** — plans heat pump operation over a 24-hour rolling horizon
+- **Two-zone thermal model** — separately models upper floor (radiators) and lower floor (slab floor heating)
+- **Solar heat gain calculation** — accounts for passive solar gains through windows
+- **Buffer tank dynamics** — models the heat pump buffer tank coupling both heating circuits
+- **Tibber integration** — uses real-time and day-ahead electricity prices
+- **Weather-aware** — wind chill, rain cooling, and solar radiation effects
+- **COP modeling** — adjusts for outdoor temperature–dependent heat pump efficiency
+- **Real sensor feedback** — uses floor heating return temperature for slab state estimation
+- **Multiple operation modes** — Auto, Comfort, Economy, Boost, Off
+- **Rich sensor entities** — 23 sensors including per-zone temperatures, solar gain, and schedule
+- **Climate entity** — virtual thermostat with full HA climate integration
+- **Service calls** — manual optimization, mode changes, runtime parameter tuning
 
-## 📊 How It Works
+## How It Works
 
-### Thermal Model
+### Two-Zone Thermal Model
 
-The integration models your house as a two-node thermal network:
+The house is modeled as two thermal zones served by a single air-to-water heat pump with a buffer tank:
 
 ```
-                    ┌─────────────────┐
-    Heat Pump ──►   │   Concrete Slab  │  ──► Slab-to-Room ──► ┌────────────┐
-    (Q_hp)          │   (T_slab)       │      Heat Transfer     │  Room Air   │ ──► Heat Loss
-                    │   High thermal   │      (k_slab)          │  (T_room)   │     to outside
-                    │   mass           │                        │  + furniture │     (U × ΔT)
-                    └─────────────────┘                        └────────────┘
+                    ┌─────────────────────────┐
+                    │    Heat Pump (COP)       │
+                    └────────┬────────────────┘
+                             │ Q_hp
+                    ┌────────▼────────────────┐
+                    │   Buffer Tank (35L)      │
+                    └──┬──────────────────┬───┘
+           Q_rad (40%) │                  │ Q_floor (60%)
+                       │                  │
+        ┌──────────────▼───┐   ┌─────────▼────────────┐
+        │  Zone 1: Upper   │   │  Zone 2: Lower Floor  │
+        │  Floor (Radiator)│   │  (Slab Floor Heating)  │
+        │  Low thermal mass│   │  High thermal mass     │
+        │  Fast response   │   │  Slow response         │
+        └──────┬───────────┘   └──────┬────────────────┘
+               │  Q_inter (open       │
+               │◄─layout heat─────────┤
+               │   transfer)          │
+               │                      │
+          ┌────▼──────────────────────▼───┐
+          │   Outdoor environment          │
+          │   (Q_loss_upper + Q_loss_lower)│
+          └───────────────────────────────┘
 ```
 
-**Key thermal dynamics:**
-- `C_room × dT_room/dt = k_slab × (T_slab - T_room) - U_eff × (T_room - T_outdoor) + Q_internal`
-- `C_slab × dT_slab/dt = COP × P_electrical - k_slab × (T_slab - T_room)`
+**Zone 1 — Upper Floor (Radiators):**
+- Low thermal mass (~3 kWh/°C) — responds quickly to heating changes
+- Heated by radiators drawing from the buffer tank
+- Radiators provide rapid temperature adjustment
+
+**Zone 2 — Lower Floor (Slab Heating):**
+- High thermal mass (~8 kWh/°C) — stores large amounts of heat
+- Heated by floor heating pipes embedded in the concrete slab
+- Ideal for pre-heating during low-price periods
+
+**Inter-Zone Heat Transfer:**
+- Open layout allows warm air to circulate between floors
+- Modeled as `Q_inter = k_inter × (T_lower − T_upper)`
+
+**Buffer Tank:**
+- 35L buffer tank couples the heat pump to both heating circuits
+- Small thermal mass (~0.04 kWh/°C) but important for system dynamics
+- Heat pump heats the buffer; buffer supplies both circuits
+
+### Solar Heat Gain
+
+The optimizer accounts for passive solar heat gains through windows:
+
+```
+Q_solar = solar_radiation × window_area × orientation_factor × SHGC / 1000
+```
+
+Where:
+- `solar_radiation` — from weather forecast or dedicated sensor (W/m²)
+- `window_area` — total glazing area (m²)
+- `orientation_factor` — correction for window orientation (1.0 = fully south-facing)
+- `SHGC` — Solar Heat Gain Coefficient of the glazing (typically 0.3–0.8)
+
+Solar gains are split between zones based on the `solar_upper_fraction` parameter (default: 40% upper, 60% lower for typical open-plan houses with south-facing lower floor).
+
+### Floor Return Temperature Feedback
+
+If a floor heating return temperature sensor is configured:
+- The optimizer uses the actual return temperature as feedback for slab thermal state
+- More accurate than pure model-based estimation
+- Merged with model prediction: 70% sensor, 30% model for noise smoothing
 
 ### Optimization Algorithm
 
-The optimizer solves the following problem every 30 minutes:
+The MPC solves at each interval:
 
 ```
-minimize    Σ price[k] × P_el[k] × Δt                    (electricity cost)
-          + comfort_weight × Σ penalty(T_room[k])          (comfort violation)
-          + smoothness × Σ (P[k+1] - P[k])²               (avoid cycling)
+minimize   Σ price[k] × P_el[k] × dt                         (electricity cost)
+         + comfort_weight × Σ penalty(T_upper, T_lower)       (comfort violations)
+         + 0.05 × comfort_weight × Σ (T - T_comfort)²         (comfort tracking)
+         + 0.01 × Σ ΔP²                                       (smoothness)
 
-subject to  T_min ≤ T_room[k] ≤ T_max                     (soft constraints)
-            P_min ≤ P_el[k] ≤ P_max                        (power limits)
-            Thermal dynamics model                          (physics)
+subject to  P_min ≤ P_el[k] ≤ P_max
+            Two-zone thermal dynamics
 ```
 
-The solver uses **L-BFGS-B** (scipy) which efficiently handles box-constrained optimization.
+The solver (L-BFGS-B) finds the optimal power schedule for 24 hours at 15-minute resolution. Both zone temperatures are penalized for deviating from comfort bounds.
 
-### Pre-heating Strategy
+### Backward Compatibility
 
-When the optimizer detects an upcoming expensive period:
-1. It increases heating power during the preceding cheap period
-2. The slab floor stores thermal energy (due to high thermal mass)
-3. During the expensive period, heating power is reduced
-4. The slab slowly releases stored heat, maintaining comfort
+The component automatically falls back to the original single-zone model when two-zone parameters are not configured. All existing functionality is preserved.
 
-### COP Variation
-
-The heat pump COP is modeled as a function of outdoor temperature:
-```
-COP ≈ COP_nominal × max(0.3, 1 + 0.025 × (T_outdoor - 7°C))
-```
-This means the optimizer also prefers heating when it's warmer outside (higher COP).
-
-## 🚀 Installation
+## Installation
 
 ### HACS (Recommended)
 
-1. Open HACS in Home Assistant
-2. Click "Integrations" → "⋮" (three dots) → "Custom repositories"
-3. Add this repository URL and select "Integration" as the category
-4. Click "Download" to install
-5. Restart Home Assistant
+1. Open HACS → Integrations → ⋮ → Custom repositories
+2. Add `https://github.com/your-username/ha_heatpump_optimizer` as category: Integration
+3. Install "Heat Pump Cost Optimizer"
+4. Restart Home Assistant
 
-### Manual Installation
+### Manual
 
-1. Copy the `custom_components/heatpump_optimizer` folder to your Home Assistant's `custom_components` directory:
-
-```bash
-# From your Home Assistant config directory:
-mkdir -p custom_components
-cp -r /path/to/ha_heatpump_optimizer/custom_components/heatpump_optimizer custom_components/
-```
-
+1. Copy `custom_components/heatpump_optimizer/` to your `config/custom_components/`
 2. Restart Home Assistant
 
-## ⚙️ Configuration
+## Configuration
 
-### Step 1: Add the Integration
+The integration is configured through the Home Assistant UI in 4 steps:
 
-1. Go to **Settings** → **Devices & Services** → **Add Integration**
-2. Search for **"Heat Pump Cost Optimizer"**
-3. Follow the setup wizard:
+### Step 1: API & Entities
 
-### Step 2: API & Entities
+| Parameter | Description |
+|---|---|
+| Tibber API token | Get from https://developer.tibber.com |
+| Weather entity | Your weather integration (e.g., `weather.home`) |
+| Indoor temp sensor | Optional: temperature sensor for main living area |
+| Outdoor temp sensor | Optional: outdoor temperature sensor |
+| Heat pump entity | Optional: climate entity for heat pump control |
+| Heat pump switch | Optional: switch entity for on/off control |
+| **Solar radiation sensor** | Optional: sensor providing W/m² (e.g., from weather integration) |
+| **Floor return temp sensor** | Optional: floor heating return temperature sensor |
 
-| Field | Description |
-|-------|-------------|
-| **Tibber API Token** | Get from [developer.tibber.com](https://developer.tibber.com) |
-| **Weather Entity** | Your HA weather entity (e.g., `weather.home`) |
-| **Indoor Temp Sensor** | (Optional) Temperature sensor inside the house |
-| **Outdoor Temp Sensor** | (Optional) Temperature sensor outside |
-| **Heat Pump Climate Entity** | (Optional) Your heat pump's climate entity |
-| **Heat Pump Switch Entity** | (Optional) On/off switch for the heat pump |
-
-### Step 3: Temperature Settings
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Target Temperature | 21°C | Desired room temperature |
-| Minimum Temperature | 19°C | Lowest acceptable temperature |
-| Maximum Temperature | 23°C | Highest acceptable temperature |
-| Daytime Comfort | 21°C | Target during day hours |
-| Nighttime Comfort | 19.5°C | Target during night hours |
-| Day Start | 07:00 | When "day" mode begins |
-| Day End | 22:00 | When "night" mode begins |
-
-### Step 4: Thermal Model Parameters
+### Step 2: Temperature Settings
 
 | Parameter | Default | Description |
-|-----------|---------|-------------|
-| House Thermal Mass | 10 kWh/°C | Total thermal inertia of building |
-| Heat Loss Coefficient | 0.15 kW/°C | Overall insulation quality |
-| Slab Thermal Mass | 5 kWh/°C | Thermal inertia of concrete slab |
-| Slab Heat Transfer | 0.8 kW/°C | Slab-to-room heat transfer rate |
-| Nominal COP | 3.5 | Heat pump COP at 7°C outdoor |
-| Max Power | 5 kW | Maximum electrical input |
-| Min Power | 1 kW | Minimum electrical input |
-| Optimization Interval | 30 min | How often to re-optimize |
-| Price Weight | 1.0 | Priority of cost savings |
-| Comfort Weight | 5.0 | Priority of temperature comfort |
+|---|---|---|
+| Target temperature | 21.0°C | Desired indoor temperature |
+| Min temperature | 19.0°C | Lowest acceptable temperature |
+| Max temperature | 23.0°C | Highest acceptable temperature |
+| Comfort temp (day) | 21.0°C | Target during daytime |
+| Comfort temp (night) | 19.5°C | Target during nighttime |
+| Day start hour | 7 | When "day" begins |
+| Day end hour | 22 | When "day" ends |
 
-### Estimating Your Thermal Parameters
+### Step 3: Thermal Model & Optimization
 
-**House Thermal Mass (kWh/°C):**
-- Light construction (timber frame): 3-6 kWh/°C
-- Medium construction: 6-12 kWh/°C
-- Heavy construction (concrete/brick): 12-25 kWh/°C
+| Parameter | Default | Description |
+|---|---|---|
+| House thermal mass | 10.0 kWh/°C | Overall thermal mass (single-zone fallback) |
+| Heat loss coefficient | 0.15 kW/°C | Envelope heat loss rate |
+| Slab thermal mass | 5.0 kWh/°C | Concrete slab thermal mass |
+| Slab heat transfer | 0.8 kW/°C | Slab-to-room conductance |
+| HP nominal COP | 3.5 | COP at 7°C outdoor |
+| HP max power | 5.0 kW | Maximum electrical input |
+| HP min power | 1.0 kW | Minimum electrical input |
+| Optimization interval | 30 min | How often to re-optimize |
+| Price weight | 1.0 | Cost sensitivity |
+| Comfort weight | 5.0 | Comfort sensitivity |
 
-**Heat Loss Coefficient (kW/°C):**
-- Well-insulated new house: 0.08-0.15 kW/°C
-- Average house: 0.15-0.25 kW/°C
-- Older, less insulated: 0.25-0.50 kW/°C
+### Step 4: Two-Zone & Solar (Optional)
 
-**Quick test:** If your house drops 1°C in X hours when heating is off and it's 0°C outside at 20°C inside:
-- `Heat Loss Coefficient ≈ House Thermal Mass × 1°C / (X hours × 20°C)`
+| Parameter | Default | Description |
+|---|---|---|
+| Upper floor thermal mass | 3.0 kWh/°C | Radiator zone (lighter) |
+| Lower floor thermal mass | 8.0 kWh/°C | Slab zone (heavier) |
+| Upper floor heat loss | 0.08 kW/°C | Upper floor envelope loss |
+| Lower floor heat loss | 0.07 kW/°C | Lower floor envelope loss |
+| Inter-zone transfer | 0.5 kW/°C | Heat transfer between floors |
+| Radiator power fraction | 0.4 | Share of HP output to radiators (0–1) |
+| Upper floor area ratio | 0.5 | Upper floor share of total area |
+| Buffer tank volume | 35 L | Buffer tank size |
+| Window area | 10.0 m² | Total glazing area |
+| Orientation factor | 0.7 | Window solar orientation (1.0=full south) |
+| SHGC | 0.7 | Solar heat gain coefficient |
 
-**Slab Thermal Mass:**
-- 10cm concrete slab: ~3 kWh/°C per 100m²
-- 15cm concrete slab: ~5 kWh/°C per 100m²
-- 20cm concrete slab: ~7 kWh/°C per 100m²
+## Finding the Right Sensors
 
-## 📱 Entities Created
+### Solar Radiation Sensor
 
-### Sensors
+Solar radiation data can come from:
+- **Weather integration**: Some weather integrations expose `solar_irradiance` in their forecast
+- **Dedicated sensor**: e.g., a solar radiation meter connected via ESP/Zigbee
+- **OpenWeatherMap**: The OpenWeatherMap integration can provide solar radiation data
+- **Met.no**: The Met.no integration may include solar data in forecasts
+
+If no sensor is configured, solar gains are set to zero (conservative estimate).
+
+### Floor Heating Return Temperature Sensor
+
+The floor heating return temperature is the temperature of water returning from the floor heating circuit. It's a proxy for average slab temperature. You can find this sensor from:
+- **Heat pump integration**: Many heat pump integrations expose return water temperature
+- **Add-on temperature sensor**: A temperature probe clamped to the return pipe
+- **Underfloor heating controller**: Some controllers report return temperature
+
+Example entity IDs:
+- `sensor.heat_pump_return_temperature`
+- `sensor.floor_heating_return_temp`
+- `sensor.nibe_return_line_temperature`
+
+### Configuring Window Parameters
+
+**Window area**: Measure or estimate the total glazing area of windows that receive significant solar radiation. Include sliding doors. A typical Scandinavian house might have 8–15 m² of glazing.
+
+**Orientation factor**: This accounts for the mix of window orientations:
+- 1.0 = All windows face south (maximum solar gain)
+- 0.7 = Mostly south-facing with some east/west (typical)
+- 0.5 = Evenly distributed (all directions)
+- 0.3 = Mostly north-facing (minimal solar gain)
+
+**SHGC (Solar Heat Gain Coefficient)**: Depends on glazing type:
+- Single clear glass: ~0.8
+- Double clear glass: ~0.7
+- Double low-e: ~0.5–0.65
+- Triple low-e: ~0.3–0.5
+
+## Entities Created
+
+### Sensors (23 total)
 
 | Entity | Description |
-|--------|-------------|
+|---|---|
 | `sensor.optimization_mode` | Current mode (auto/comfort/economy/boost/off) |
-| `sensor.optimization_status` | Solver status (optimal/suboptimal/failed) |
-| `sensor.predicted_savings` | Predicted savings in SEK |
+| `sensor.optimization_status` | Solver status and solve time |
+| `sensor.predicted_savings` | Predicted savings vs baseline (SEK) |
 | `sensor.savings_percentage` | Savings as percentage |
 | `sensor.predicted_cost` | Predicted optimized cost |
 | `sensor.baseline_cost` | Cost without optimization |
 | `sensor.current_electricity_price` | Current Tibber price |
 | `sensor.optimal_setpoint` | Current recommended setpoint |
-| `sensor.recommended_power` | Recommended power level |
-| `sensor.estimated_cop` | Current estimated COP |
+| `sensor.recommended_power` | Current recommended power (kW) |
+| `sensor.estimated_cop` | COP at current outdoor temp |
 | `sensor.indoor_temperature_optimizer` | Indoor temp used by optimizer |
 | `sensor.outdoor_temperature_optimizer` | Outdoor temp used by optimizer |
 | `sensor.slab_temperature_estimated` | Estimated slab temperature |
-| `sensor.next_optimization` | When next optimization runs |
-| `sensor.last_optimization` | When last optimization ran |
-| `sensor.heat_pump_action` | Current action (off/eco/normal/pre_heat/boost) |
-| `sensor.optimization_schedule` | Full schedule as attributes |
+| `sensor.next_optimization` | Next optimization timestamp |
+| `sensor.last_optimization` | Last optimization timestamp |
+| `sensor.heat_pump_action` | Current action with attributes |
+| `sensor.optimization_schedule` | Full 24h schedule as attributes |
+| `sensor.upper_floor_temperature` | **Upper floor (radiator zone) temp** |
+| `sensor.lower_floor_temperature` | **Lower floor (slab zone) temp** |
+| `sensor.floor_heating_return_temperature` | **Real floor return temp** |
+| `sensor.solar_radiation_optimizer` | **Solar radiation (W/m²)** |
+| `sensor.solar_heat_gain` | **Current solar gain (kW)** |
+| `sensor.buffer_tank_temperature_model` | **Modeled buffer tank temp** |
 
-### Climate
+### Climate Entity
 
 | Entity | Description |
-|--------|-------------|
-| `climate.heat_pump_optimizer` | Virtual thermostat with preset modes |
+|---|---|
+| `climate.heat_pump_optimizer` | Virtual thermostat with HVAC modes + presets. Shows zone temperatures in attributes. |
 
 ### Switch
 
 | Entity | Description |
-|--------|-------------|
-| `switch.optimizer_active` | Enable/disable the optimizer |
+|---|---|
+| `switch.optimizer_active` | Quick toggle for optimizer on/off |
 
-## 🔧 Services
+## Services
 
 ### `heatpump_optimizer.run_optimization`
-Manually trigger an optimization run.
 
+Manually trigger optimization:
 ```yaml
 service: heatpump_optimizer.run_optimization
 ```
 
 ### `heatpump_optimizer.set_mode`
-Set the optimizer mode.
 
+Set operating mode:
 ```yaml
 service: heatpump_optimizer.set_mode
 data:
@@ -210,180 +286,121 @@ data:
 ```
 
 ### `heatpump_optimizer.set_thermal_parameters`
-Update thermal model parameters at runtime.
 
+Tune thermal model at runtime (supports all parameters including two-zone):
 ```yaml
 service: heatpump_optimizer.set_thermal_parameters
 data:
   house_thermal_mass: 12.0
-  house_heat_loss_coefficient: 0.12
-  slab_thermal_mass: 6.0
-  slab_heat_transfer: 0.9
   heat_pump_cop_nominal: 3.8
+  radiator_power_fraction: 0.45
+  window_area: 12.0
+  solar_heat_gain_coefficient: 0.65
+  inter_zone_heat_transfer: 0.6
 ```
 
-## 📈 Automation Examples
+## Automation Examples
 
-### Boost before guests arrive
+### Pre-heat lower floor before expensive period
+
 ```yaml
 automation:
-  - alias: "Pre-heat before guests"
+  - alias: "Pre-heat slab before price peak"
     trigger:
-      - platform: time
-        at: "15:00"
+      - platform: numeric_state
+        entity_id: sensor.heat_pump_action
+        attribute: price
+        above: 2.0
     condition:
-      - condition: state
-        entity_id: input_boolean.guests_arriving
-        state: "on"
+      - condition: numeric_state
+        entity_id: sensor.current_electricity_price
+        below: 1.0
     action:
       - service: heatpump_optimizer.set_mode
         data:
           mode: boost
-      - delay: "02:00:00"
+      - delay: "01:00:00"
       - service: heatpump_optimizer.set_mode
         data:
           mode: auto
 ```
 
-### Switch to economy when away
+### Economy mode when away
+
 ```yaml
 automation:
-  - alias: "Economy mode when away"
+  - alias: "Economy when nobody home"
     trigger:
       - platform: state
         entity_id: group.family
         to: "not_home"
-        for: "00:30:00"
     action:
       - service: heatpump_optimizer.set_mode
         data:
           mode: economy
-  
-  - alias: "Auto mode when home"
-    trigger:
-      - platform: state
-        entity_id: group.family
-        to: "home"
-    action:
-      - service: heatpump_optimizer.set_mode
-        data:
-          mode: auto
 ```
 
-### Notification on high savings
-```yaml
-automation:
-  - alias: "Notify on optimization savings"
-    trigger:
-      - platform: numeric_state
-        entity_id: sensor.heatpump_optimizer_savings_percentage
-        above: 20
-    action:
-      - service: notify.mobile
-        data:
-          title: "💰 Heat Pump Savings"
-          message: >
-            Optimizer saving {{ states('sensor.heatpump_optimizer_savings_percentage') }}%
-            ({{ states('sensor.heatpump_optimizer_predicted_savings') }} SEK)
-            over the next 24 hours!
-```
+## Troubleshooting
 
-## 🐛 Troubleshooting
+### Temperature swings
 
-### Common Issues
+If temperatures swing too much, increase `comfort_weight` (options flow) or decrease `price_weight`. For the two-zone model, check that `inter_zone_heat_transfer` matches your layout (higher for open plan, lower for closed rooms).
 
-**"Invalid Tibber API token"**
-- Get a valid token at [developer.tibber.com](https://developer.tibber.com)
-- Make sure you're using the personal access token, not the OAuth token
-- Check that your Tibber subscription is active
+### Solar over-heating
 
-**"Not enough price data"**
-- Tibber tomorrow prices are typically available after 13:00
-- The optimizer needs at least 4 time steps (1 hour) of price data
-- Check the `sensor.optimization_status` entity for details
+If the model overestimates solar gain, reduce `window_area`, `orientation_factor`, or `SHGC`. You can adjust via the options flow or the `set_thermal_parameters` service.
 
-**"Optimization failed"**
-- Check Home Assistant logs for detailed error messages
-- Verify that numpy and scipy are installed (they should be auto-installed)
-- Try adjusting thermal parameters to more conservative values
+### Floor heating slow response
 
-**Temperature swings too large**
-- Increase the `comfort_weight` parameter (e.g., from 5.0 to 10.0)
-- Narrow the min/max temperature range
-- The optimizer needs a few days to learn your house's thermal behavior
+This is expected — slab floor heating has very high thermal mass. The optimizer pre-heats the slab during cheap periods. If the lower floor is too cold, check that `radiator_power_fraction` isn't too high (leaving too little heat for the floor circuit).
 
-**Temperature swings too small (not saving enough)**
-- Decrease the `comfort_weight` (e.g., from 5.0 to 2.0)
-- Increase the `price_weight` (e.g., from 1.0 to 2.0)
-- Widen the min/max temperature range
-
-**Heat pump not responding**
-- Verify the climate/switch entity IDs are correct
-- Check that the entities support the `set_temperature` / `turn_on/off` services
-- Some heat pumps need specific integration setup (e.g., Nibe, Thermia)
-
-### Logs
-
-Enable debug logging for detailed information:
+### Debug logging
 
 ```yaml
-# In configuration.yaml
 logger:
+  default: info
   logs:
     custom_components.heatpump_optimizer: debug
 ```
 
-### Verifying the Thermal Model
-
-1. Set mode to "off" and observe how quickly the house cools
-2. Note the cooling rate (°C/hour) and outdoor temperature
-3. Calculate: `Heat Loss Coefficient = Thermal Mass × Cooling Rate / (T_indoor - T_outdoor)`
-4. Update parameters via the service call or options flow
-
-## 🏗️ Architecture
+## Architecture
 
 ```
 custom_components/heatpump_optimizer/
-├── __init__.py              # Integration setup, service registration
-├── manifest.json            # HA integration manifest
-├── const.py                 # Constants and defaults
-├── config_flow.py           # UI configuration wizard
-├── coordinator.py           # Data coordinator (Tibber, weather, optimization)
-├── thermal_model.py         # Two-node thermal model
-├── optimizer.py             # MPC optimization engine
-├── sensor.py                # 17 sensor entities
-├── climate.py               # Climate entity with presets
-├── switch.py                # Enable/disable switch
-├── services.yaml            # Service definitions
-├── strings.json             # UI strings
-└── translations/
-    ├── en.json              # English translations
-    └── sv.json              # Swedish translations
+├── __init__.py          # Integration setup and service registration
+├── config_flow.py       # 4-step UI configuration flow
+├── const.py             # Constants and defaults (single + two-zone)
+├── coordinator.py       # Data fetching, optimization scheduling, action application
+├── thermal_model.py     # Two-zone thermal model with buffer tank and solar gains
+├── optimizer.py         # MPC optimizer (L-BFGS-B) for both zone models
+├── sensor.py            # 23 sensor entities including zone and solar sensors
+├── climate.py           # Virtual climate entity with zone attributes
+├── switch.py            # Optimizer enable/disable switch
+├── services.yaml        # Service definitions
+├── strings.json         # Default UI strings
+├── translations/
+│   ├── en.json          # English translations
+│   └── sv.json          # Swedish translations
+└── manifest.json        # Integration metadata
 ```
 
-## 📋 Requirements
+## Requirements
 
-- Home Assistant 2024.1 or newer
-- Tibber subscription with API access
-- A weather integration (e.g., Met.no, OpenWeatherMap)
-- Python packages: `numpy>=1.24.0`, `scipy>=1.10.0` (auto-installed)
+- Home Assistant 2024.1.0 or later
+- Tibber account with API token
+- Weather integration (e.g., Met.no, OpenWeatherMap)
+- Python packages: `numpy`, `scipy` (installed automatically)
 
-## 🤝 Contributing
+## Contributing
 
-Contributions are welcome! Areas where help is needed:
-- Support for more electricity price providers (Nord Pool, Entso-E)
-- Auto-learning of thermal parameters from historical data
-- Support for multi-zone heating
-- Integration with specific heat pump brands (Nibe, Thermia, IVT, etc.)
-- Dashboard cards for visualization
+Contributions are welcome! Please open an issue or pull request.
 
-## 📄 License
+## License
 
-MIT License - see LICENSE file for details.
+MIT License
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - [Tibber](https://tibber.com) for the electricity price API
-- [Home Assistant](https://www.home-assistant.io) for the amazing platform
-- [scipy](https://scipy.org) for the optimization solver
-- The Home Assistant community for inspiration and testing
+- [Home Assistant](https://www.home-assistant.io/) community
+- Inspired by research on MPC for building energy optimization
