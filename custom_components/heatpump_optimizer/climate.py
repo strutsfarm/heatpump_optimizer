@@ -204,6 +204,28 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
             if "lower_setpoint" in action:
                 attrs["lower_floor_setpoint"] = action["lower_setpoint"]
 
+            # DHW status
+            attrs["dhw_enabled"] = self.coordinator.data.get("dhw_enabled", False)
+            attrs["dhw_temperature"] = self.coordinator.data.get("dhw_temperature")
+            attrs["dhw_setpoint"] = self.coordinator.data.get("dhw_setpoint")
+            attrs["dhw_heating_active"] = self.coordinator.data.get(
+                "dhw_heating_active", False
+            )
+            attrs["dhw_heating_cost"] = self.coordinator.data.get(
+                "dhw_heating_cost", 0.0
+            )
+
+            # Predictive optimization insights
+            predictive = self.coordinator.data.get("predictive_info", {})
+            if predictive:
+                attrs["solar_reduction_factor"] = predictive.get(
+                    "solar_reduction_factor"
+                )
+                attrs["wind_anticipation_factor"] = predictive.get(
+                    "wind_anticipation_factor"
+                )
+                attrs["pre_heat_urgency"] = predictive.get("pre_heat_urgency")
+
         return attrs
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:

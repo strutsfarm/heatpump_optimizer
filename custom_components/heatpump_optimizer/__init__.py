@@ -67,6 +67,14 @@ SERVICE_SCHEMA_SET_THERMAL_PARAMS = vol.Schema(
         vol.Optional("radiator_power_fraction"): vol.Coerce(float),
         vol.Optional("window_area"): vol.Coerce(float),
         vol.Optional("solar_heat_gain_coefficient"): vol.Coerce(float),
+        # DHW parameters
+        vol.Optional("dhw_tank_volume"): vol.Coerce(float),
+        vol.Optional("dhw_setpoint"): vol.Coerce(float),
+        vol.Optional("dhw_min_temperature"): vol.Coerce(float),
+        vol.Optional("dhw_daily_consumption"): vol.Coerce(float),
+        # Weather sensitivity parameters
+        vol.Optional("wind_sensitivity_factor"): vol.Coerce(float),
+        vol.Optional("rain_heat_loss_multiplier"): vol.Coerce(float),
     }
 )
 

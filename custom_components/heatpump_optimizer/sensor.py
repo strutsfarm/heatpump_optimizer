@@ -61,6 +61,12 @@ async def async_setup_entry(
         SolarRadiationSensor(coordinator, entry),
         SolarHeatGainSensor(coordinator, entry),
         BufferTankTempSensor(coordinator, entry),
+        # DHW sensors
+        DHWTemperatureSensor(coordinator, entry),
+        DHWScheduleSensor(coordinator, entry),
+        DHWHeatingCostSensor(coordinator, entry),
+        # Predictive insight sensors
+        PredictiveInsightSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -563,3 +569,145 @@ class BufferTankTempSensor(HeatPumpOptimizerSensorBase):
             val = self.coordinator.data.get("buffer_tank_temperature")
             return round(val, 1) if val is not None else None
         return None
+
+
+# ---------------------------------------------------------------------------
+# DHW (Domestic Hot Water) sensors
+# ---------------------------------------------------------------------------
+
+
+class DHWTemperatureSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing current DHW tank temperature."""
+
+    _attr_icon = "mdi:water-thermometer"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "dhw_temperature", "DHW Temperature"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("dhw_temperature")
+            return round(val, 1) if val is not None else None
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data:
+            return {
+                "dhw_setpoint": self.coordinator.data.get("dhw_setpoint"),
+                "dhw_min_temperature": self.coordinator.data.get("dhw_min_temperature"),
+                "dhw_heating_active": self.coordinator.data.get("dhw_heating_active", False),
+                "dhw_enabled": self.coordinator.data.get("dhw_enabled", False),
+            }
+        return {}
+
+
+class DHWScheduleSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing the planned DHW heating schedule for the next 24 hours."""
+
+    _attr_icon = "mdi:water-boiler-auto"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "dhw_schedule", "DHW Heating Schedule"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data:
+            schedule = self.coordinator.data.get("dhw_schedule", [])
+            if schedule:
+                active_steps = sum(1 for s in schedule if s.get("dhw_power", 0) > 0.1)
+                return f"{active_steps} heating periods"
+            return "no schedule"
+        return "no schedule"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data:
+            return {
+                "dhw_schedule": self.coordinator.data.get("dhw_schedule", []),
+            }
+        return {}
+
+
+class DHWHeatingCostSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing the estimated DHW heating cost."""
+
+    _attr_icon = "mdi:cash-minus"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "SEK"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "dhw_heating_cost", "DHW Heating Cost"
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("dhw_heating_cost")
+            return round(val, 2) if val is not None else None
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Predictive insight sensors
+# ---------------------------------------------------------------------------
+
+
+class PredictiveInsightSensor(HeatPumpOptimizerSensorBase):
+    """Sensor showing predictive optimization insights.
+
+    Exposes the anticipatory control signals from the forecast analysis:
+    - Solar reduction factor (how much heating is reduced due to upcoming sun)
+    - Wind anticipation factor (how much extra heating due to upcoming wind)
+    - Pre-heat urgency (overall urgency to pre-heat)
+    """
+
+    _attr_icon = "mdi:crystal-ball"
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator, entry, "predictive_insight", "Predictive Optimization Insight"
+        )
+
+    @property
+    def native_value(self) -> str | None:
+        if self.coordinator.data:
+            info = self.coordinator.data.get("predictive_info", {})
+            if not info:
+                return "no forecast"
+
+            urgency = info.get("pre_heat_urgency", 0)
+            solar_red = info.get("solar_reduction_factor", 1.0)
+
+            if solar_red < 0.8:
+                return "solar_anticipation"
+            elif urgency > 0.5:
+                return "pre_heating"
+            else:
+                return "normal"
+        return "unknown"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data:
+            info = self.coordinator.data.get("predictive_info", {})
+            return {
+                "solar_reduction_factor": info.get("solar_reduction_factor"),
+                "wind_anticipation_factor": info.get("wind_anticipation_factor"),
+                "rain_anticipation_factor": info.get("rain_anticipation_factor"),
+                "pre_heat_urgency": info.get("pre_heat_urgency"),
+                "future_solar_energy_kwh": info.get("future_solar_energy_kwh"),
+                "future_solar_6_12h_kwh": info.get("future_solar_6_12h_kwh"),
+                "avg_future_wind_ms": info.get("avg_future_wind_ms"),
+                "avg_future_precip_mmh": info.get("avg_future_precip_mmh"),
+            }
+        return {}

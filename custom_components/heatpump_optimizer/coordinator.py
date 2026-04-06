@@ -3,8 +3,8 @@
 The coordinator manages:
 1. Fetching electricity prices from Tibber API
 2. Fetching weather forecasts from Home Assistant weather entities
-3. Fetching solar radiation and floor return temperature from sensors
-4. Running the MPC optimization on a regular schedule
+3. Fetching solar radiation, floor return temperature, and DHW temperature
+4. Running the MPC optimization (with predictive weather anticipation + DHW)
 5. Applying optimization results to heat pump control
 """
 from __future__ import annotations
@@ -34,6 +34,7 @@ from .const import (
     CONF_HEAT_PUMP_SWITCH_ENTITY,
     CONF_SOLAR_RADIATION_ENTITY,
     CONF_FLOOR_RETURN_TEMP_ENTITY,
+    CONF_DHW_TEMP_ENTITY,
     CONF_TARGET_TEMP,
     CONF_MIN_TEMP,
     CONF_MAX_TEMP,
@@ -51,6 +52,10 @@ from .const import (
     CONF_OPTIMIZATION_INTERVAL,
     CONF_PRICE_WEIGHT,
     CONF_COMFORT_WEIGHT,
+    CONF_DHW_SETPOINT,
+    CONF_DHW_MIN_TEMP,
+    CONF_WIND_SENSITIVITY,
+    CONF_RAIN_HEAT_LOSS_MULTIPLIER,
     DEFAULT_TARGET_TEMP,
     DEFAULT_MIN_TEMP,
     DEFAULT_MAX_TEMP,
@@ -61,6 +66,8 @@ from .const import (
     DEFAULT_OPTIMIZATION_INTERVAL,
     DEFAULT_PRICE_WEIGHT,
     DEFAULT_COMFORT_WEIGHT,
+    DEFAULT_DHW_SETPOINT,
+    DEFAULT_DHW_MIN_TEMP,
     MODE_AUTO,
     MODE_COMFORT,
     MODE_ECONOMY,
@@ -171,6 +178,9 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         self._floor_return_temp: float | None = None
         self._solar_radiation_forecast: list[float] = []
 
+        # DHW state
+        self._dhw_temperature: float | None = None
+
     @property
     def mode(self) -> str:
         """Return current operation mode."""
@@ -211,6 +221,11 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         """Current floor heating return temperature."""
         return self._floor_return_temp
 
+    @property
+    def dhw_temperature(self) -> float | None:
+        """Current DHW temperature."""
+        return self._dhw_temperature
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data and run optimization."""
         try:
@@ -220,7 +235,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             # Fetch prices from Tibber
             await self._fetch_tibber_prices()
 
-            # Fetch weather forecast
+            # Fetch weather forecast (full 24h for solar, wind, rain, temp)
             await self._fetch_weather_forecast()
 
             # Run optimization if in auto mode
@@ -270,7 +285,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
 
     async def async_run_optimization(self) -> None:
         """Run the MPC optimization."""
-        _LOGGER.info("Running heat pump optimization")
+        _LOGGER.info("Running heat pump optimization (predictive MPC)")
 
         try:
             prices, outdoor_temps, wind_speeds, precipitation, solar_rad = (
@@ -283,6 +298,15 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     len(prices),
                 )
                 return
+
+            _LOGGER.debug(
+                "Forecast data: %d steps, wind range=%.1f-%.1f m/s, "
+                "precip range=%.1f-%.1f mm/h, solar range=%.0f-%.0f W/m²",
+                len(prices),
+                float(np.min(wind_speeds)), float(np.max(wind_speeds)),
+                float(np.min(precipitation)), float(np.max(precipitation)),
+                float(np.min(solar_rad)), float(np.max(solar_rad)),
+            )
 
             # Run optimization in executor to avoid blocking
             result = await self.hass.async_add_executor_job(
@@ -304,10 +328,12 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             )
 
             _LOGGER.info(
-                "Optimization complete: savings=%.1f%%, cost=%.2f, status=%s",
+                "Optimization complete: savings=%.1f%%, cost=%.2f, status=%s, "
+                "dhw_enabled=%s",
                 result.savings_percentage,
                 result.predicted_cost,
                 result.status,
+                self._thermal_params.dhw_enabled,
             )
 
         except Exception as err:
@@ -355,6 +381,22 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         if "solar_heat_gain_coefficient" in params:
             self._thermal_params.solar_heat_gain_coefficient = params[
                 "solar_heat_gain_coefficient"
+            ]
+        # DHW params
+        if "dhw_tank_volume" in params:
+            self._thermal_params.dhw_tank_volume = params["dhw_tank_volume"]
+        if "dhw_setpoint" in params:
+            self._thermal_params.dhw_setpoint = params["dhw_setpoint"]
+        if "dhw_min_temperature" in params:
+            self._thermal_params.dhw_min_temp = params["dhw_min_temperature"]
+        if "dhw_daily_consumption" in params:
+            self._thermal_params.dhw_daily_consumption = params["dhw_daily_consumption"]
+        # Weather sensitivity params
+        if "wind_sensitivity_factor" in params:
+            self._thermal_params.wind_sensitivity = params["wind_sensitivity_factor"]
+        if "rain_heat_loss_multiplier" in params:
+            self._thermal_params.rain_heat_loss_multiplier = params[
+                "rain_heat_loss_multiplier"
             ]
 
         self._thermal_model = ThermalModel(self._thermal_params)
@@ -422,6 +464,17 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                 try:
                     self._solar_radiation = float(state.state)
                     self._current_state.solar_radiation = self._solar_radiation
+                except (ValueError, TypeError):
+                    pass
+
+        # DHW temperature sensor
+        dhw_entity = self._config.get(CONF_DHW_TEMP_ENTITY)
+        if dhw_entity:
+            state = self.hass.states.get(dhw_entity)
+            if state and state.state not in ("unknown", "unavailable"):
+                try:
+                    self._dhw_temperature = float(state.state)
+                    self._current_state.dhw_temperature = self._dhw_temperature
                 except (ValueError, TypeError):
                     pass
 
@@ -504,9 +557,16 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             )
 
     async def _fetch_weather_forecast(self) -> None:
-        """Fetch weather forecast from Home Assistant weather entity.
+        """Fetch full 24-hour weather forecast from Home Assistant weather entity.
 
-        Also extracts solar radiation forecast if available.
+        Extracts per-hour forecasts for:
+        - Temperature (°C)
+        - Wind speed (m/s)
+        - Precipitation (mm/h)
+        - Solar radiation / irradiance (W/m²)
+
+        These FORECAST values (not current conditions) are what enable
+        true predictive/anticipatory control in the MPC optimizer.
         """
         weather_entity = self._config.get(CONF_WEATHER_ENTITY)
         if not weather_entity:
@@ -536,7 +596,9 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     self._solar_radiation_forecast.append(float(sr or 0.0))
 
                 _LOGGER.debug(
-                    "Fetched %d weather forecast entries", len(forecast_data)
+                    "Fetched %d weather forecast entries (full 24h+ trajectory: "
+                    "temp, wind, rain, solar)",
+                    len(forecast_data),
                 )
             else:
                 _LOGGER.warning(
@@ -570,7 +632,11 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
     def _prepare_forecast_data(
         self,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Prepare arrays from price and weather data for the optimizer.
+        """Prepare full 24-hour forecast arrays for the optimizer.
+
+        CRITICAL: This provides the FORECAST TRAJECTORIES (not just current values)
+        that enable true predictive optimization. Each array contains per-step
+        forecasted values for the entire optimization horizon.
 
         Returns: (prices, outdoor_temps, wind_speeds, precipitation, solar_radiation)
         """
@@ -600,7 +666,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         while len(prices) < n_steps:
             prices.append(prices[-1] if prices else 0.5)
 
-        # --- Weather ---
+        # --- Weather forecast (FULL 24h trajectories) ---
         outdoor_temps = []
         wind_speeds = []
         precipitation_rates = []
@@ -611,7 +677,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                 temp = fc.get("temperature", 5.0)
                 wind = fc.get("wind_speed", 0.0)
                 if wind > 30:
-                    wind = wind / 3.6
+                    wind = wind / 3.6  # Convert km/h to m/s
                 precip = fc.get("precipitation", 0.0) or 0.0
 
                 # Solar radiation: from forecast or from separate list
@@ -625,21 +691,27 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                         or 0.0
                     )
 
+                # Interpolate hourly forecast to 15-min steps
                 for _ in range(4):
                     outdoor_temps.append(temp)
                     wind_speeds.append(wind)
                     precipitation_rates.append(precip)
                     solar_rad.append(sr)
         else:
+            # Fallback: use current conditions (NOT ideal for predictive MPC)
             base_temp = self._current_state.outdoor_temperature
             current_sr = self._solar_radiation
+            _LOGGER.warning(
+                "No weather forecast available — using current conditions. "
+                "Predictive optimization will be limited."
+            )
             for _ in range(n_steps):
                 outdoor_temps.append(base_temp)
                 wind_speeds.append(0.0)
                 precipitation_rates.append(0.0)
                 solar_rad.append(current_sr)
 
-        # Pad
+        # Pad to ensure we have enough data points
         for arr in [outdoor_temps, wind_speeds, precipitation_rates, solar_rad]:
             while len(arr) < n_steps:
                 arr.append(arr[-1] if arr else 0.0)
@@ -739,6 +811,10 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             "solar_radiation": self._solar_radiation,
             "solar_heat_gain": current_solar_gain,
             "two_zone_enabled": self._thermal_params.two_zone_enabled,
+            "dhw_enabled": self._thermal_params.dhw_enabled,
+            "dhw_temperature": self._dhw_temperature or self._current_state.dhw_temperature,
+            "dhw_setpoint": self._thermal_params.dhw_setpoint,
+            "dhw_min_temperature": self._thermal_params.dhw_min_temp,
             "last_optimization": self._last_optimization,
             "next_optimization": self._next_optimization,
             "prices_available": len(self._prices),
@@ -746,6 +822,20 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         }
 
         if result:
+            # DHW schedule data
+            dhw_schedule = []
+            if result.dhw_power_schedule:
+                for i, (ts, dp, dt_val) in enumerate(zip(
+                    result.timestamps[:24],
+                    result.dhw_power_schedule[:24],
+                    result.dhw_temp_trajectory[1:25] if result.dhw_temp_trajectory else [0.0] * 24,
+                )):
+                    dhw_schedule.append({
+                        "time": ts.isoformat(),
+                        "dhw_power": round(dp, 2),
+                        "dhw_temp": round(dt_val, 1),
+                    })
+
             data.update(
                 {
                     "predicted_cost": result.predicted_cost,
@@ -754,6 +844,11 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     "savings_percentage": result.savings_percentage,
                     "optimization_status": result.status,
                     "solve_time_ms": result.solve_time_ms,
+                    "dhw_heating_cost": result.dhw_heating_cost,
+                    "dhw_heating_active": self._current_action.get("dhw_heating_active", False),
+                    "dhw_schedule": dhw_schedule,
+                    # Predictive info
+                    "predictive_info": result.predictive_info,
                     "schedule": [
                         {
                             "time": ts.isoformat(),
@@ -799,6 +894,10 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     "savings_percentage": None,
                     "optimization_status": "not_run",
                     "solve_time_ms": 0,
+                    "dhw_heating_cost": 0.0,
+                    "dhw_heating_active": False,
+                    "dhw_schedule": [],
+                    "predictive_info": {},
                     "schedule": [],
                 }
             )

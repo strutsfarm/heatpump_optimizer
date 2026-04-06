@@ -19,6 +19,9 @@ CONF_HEAT_PUMP_SWITCH_ENTITY: Final = "heat_pump_switch_entity"
 CONF_SOLAR_RADIATION_ENTITY: Final = "solar_radiation_entity"
 CONF_FLOOR_RETURN_TEMP_ENTITY: Final = "floor_return_temp_entity"
 
+# DHW sensor configuration
+CONF_DHW_TEMP_ENTITY: Final = "dhw_temp_entity"
+
 # Temperature settings
 CONF_TARGET_TEMP: Final = "target_temperature"
 CONF_MIN_TEMP: Final = "min_temperature"
@@ -53,6 +56,16 @@ CONF_WINDOW_AREA: Final = "window_area"  # m²
 CONF_SOLAR_ORIENTATION_FACTOR: Final = "solar_orientation_factor"  # 0-1
 CONF_SOLAR_HEAT_GAIN_COEFF: Final = "solar_heat_gain_coefficient"  # SHGC 0-1
 CONF_SOLAR_UPPER_FRACTION: Final = "solar_upper_fraction"  # fraction going to upper floor
+
+# DHW (Domestic Hot Water) parameters
+CONF_DHW_TANK_VOLUME: Final = "dhw_tank_volume"  # liters
+CONF_DHW_SETPOINT: Final = "dhw_setpoint"  # °C
+CONF_DHW_MIN_TEMP: Final = "dhw_min_temperature"  # °C
+CONF_DHW_DAILY_CONSUMPTION: Final = "dhw_daily_consumption"  # liters/day
+
+# Weather sensitivity parameters
+CONF_WIND_SENSITIVITY: Final = "wind_sensitivity_factor"  # fraction per m/s
+CONF_RAIN_HEAT_LOSS_MULTIPLIER: Final = "rain_heat_loss_multiplier"  # multiplier
 
 # Optimization settings
 CONF_OPTIMIZATION_HORIZON: Final = "optimization_horizon"  # hours
@@ -94,6 +107,16 @@ DEFAULT_WINDOW_AREA: Final = 10.0  # m² total glazing area
 DEFAULT_SOLAR_ORIENTATION_FACTOR: Final = 0.7  # south-facing bias
 DEFAULT_SOLAR_HEAT_GAIN_COEFF: Final = 0.7  # typical double-glazed low-e
 DEFAULT_SOLAR_UPPER_FRACTION: Final = 0.4  # 40% upper, 60% lower (open layout, sun hits lower floor)
+
+# DHW defaults
+DEFAULT_DHW_TANK_VOLUME: Final = 200.0  # liters
+DEFAULT_DHW_SETPOINT: Final = 55.0  # °C
+DEFAULT_DHW_MIN_TEMP: Final = 45.0  # °C - legionella safety
+DEFAULT_DHW_DAILY_CONSUMPTION: Final = 150.0  # liters/day average household
+
+# Weather sensitivity defaults
+DEFAULT_WIND_SENSITIVITY: Final = 0.15  # 15% heat loss increase per m/s wind
+DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER: Final = 1.15  # 15% increase when raining
 
 DEFAULT_OPTIMIZATION_HORIZON: Final = 24  # hours
 DEFAULT_OPTIMIZATION_INTERVAL: Final = 30  # minutes
@@ -145,7 +168,14 @@ ATTR_SOLAR_GAIN: Final = "solar_heat_gain"
 ATTR_SOLAR_RADIATION: Final = "solar_radiation"
 ATTR_FLOOR_RETURN_TEMP: Final = "floor_return_temperature"
 
-# Wind chill factor (additional heat loss per m/s wind)
+# DHW attributes
+ATTR_DHW_TEMP: Final = "dhw_temperature"
+ATTR_DHW_SETPOINT: Final = "dhw_setpoint"
+ATTR_DHW_HEATING_ACTIVE: Final = "dhw_heating_active"
+ATTR_DHW_HEATING_SCHEDULE: Final = "dhw_heating_schedule"
+ATTR_DHW_HEATING_COST: Final = "dhw_heating_cost"
+
+# Wind chill factor (additional heat loss per m/s wind) — legacy, now configurable
 WIND_CHILL_FACTOR: Final = 0.005  # kW/°C per m/s
-# Rain cooling factor
+# Rain cooling factor — legacy, now configurable
 RAIN_COOLING_FACTOR: Final = 0.01  # kW/°C per mm/h

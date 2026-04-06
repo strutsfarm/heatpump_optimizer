@@ -23,6 +23,7 @@ from .const import (
     CONF_HEAT_PUMP_SWITCH_ENTITY,
     CONF_SOLAR_RADIATION_ENTITY,
     CONF_FLOOR_RETURN_TEMP_ENTITY,
+    CONF_DHW_TEMP_ENTITY,
     CONF_TARGET_TEMP,
     CONF_MIN_TEMP,
     CONF_MAX_TEMP,
@@ -48,6 +49,12 @@ from .const import (
     CONF_WINDOW_AREA,
     CONF_SOLAR_ORIENTATION_FACTOR,
     CONF_SOLAR_HEAT_GAIN_COEFF,
+    CONF_DHW_TANK_VOLUME,
+    CONF_DHW_SETPOINT,
+    CONF_DHW_MIN_TEMP,
+    CONF_DHW_DAILY_CONSUMPTION,
+    CONF_WIND_SENSITIVITY,
+    CONF_RAIN_HEAT_LOSS_MULTIPLIER,
     CONF_OPTIMIZATION_HORIZON,
     CONF_OPTIMIZATION_INTERVAL,
     CONF_TIME_STEP,
@@ -78,6 +85,12 @@ from .const import (
     DEFAULT_WINDOW_AREA,
     DEFAULT_SOLAR_ORIENTATION_FACTOR,
     DEFAULT_SOLAR_HEAT_GAIN_COEFF,
+    DEFAULT_DHW_TANK_VOLUME,
+    DEFAULT_DHW_SETPOINT,
+    DEFAULT_DHW_MIN_TEMP,
+    DEFAULT_DHW_DAILY_CONSUMPTION,
+    DEFAULT_WIND_SENSITIVITY,
+    DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER,
     DEFAULT_OPTIMIZATION_HORIZON,
     DEFAULT_OPTIMIZATION_INTERVAL,
     DEFAULT_TIME_STEP,
@@ -114,7 +127,7 @@ async def validate_tibber_token(token: str) -> bool:
 class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Heat Pump Optimizer."""
 
-    VERSION = 2  # bumped for new schema
+    VERSION = 3  # bumped for DHW + predictive MPC schema
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -162,6 +175,11 @@ class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         selector.EntitySelectorConfig(domain="sensor")
                     ),
                     vol.Optional(CONF_FLOOR_RETURN_TEMP_ENTITY): selector.EntitySelector(
+                        selector.EntitySelectorConfig(
+                            domain="sensor", device_class="temperature"
+                        )
+                    ),
+                    vol.Optional(CONF_DHW_TEMP_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain="sensor", device_class="temperature"
                         )
@@ -363,10 +381,7 @@ class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Handle two-zone and solar configuration (optional step)."""
         if user_input is not None:
             self._data.update(user_input)
-            return self.async_create_entry(
-                title=self._data.get(CONF_NAME, "Heat Pump Optimizer"),
-                data=self._data,
-            )
+            return await self.async_step_dhw()
 
         return self.async_show_form(
             step_id="zones",
@@ -475,6 +490,99 @@ class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         selector.NumberSelectorConfig(
                             min=0.1, max=1.0, step=0.05,
                             mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_dhw(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle DHW (Domestic Hot Water) configuration step."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return await self.async_step_weather_sensitivity()
+
+        return self.async_show_form(
+            step_id="dhw",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_DHW_TANK_VOLUME,
+                        default=DEFAULT_DHW_TANK_VOLUME,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=50, max=500, step=10,
+                            unit_of_measurement="L",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DHW_SETPOINT,
+                        default=DEFAULT_DHW_SETPOINT,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=40, max=65, step=1,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DHW_MIN_TEMP,
+                        default=DEFAULT_DHW_MIN_TEMP,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=35, max=55, step=1,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DHW_DAILY_CONSUMPTION,
+                        default=DEFAULT_DHW_DAILY_CONSUMPTION,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=50, max=500, step=10,
+                            unit_of_measurement="L/day",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                }
+            ),
+        )
+
+    async def async_step_weather_sensitivity(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle weather sensitivity configuration step."""
+        if user_input is not None:
+            self._data.update(user_input)
+            return self.async_create_entry(
+                title=self._data.get(CONF_NAME, "Heat Pump Optimizer"),
+                data=self._data,
+            )
+
+        return self.async_show_form(
+            step_id="weather_sensitivity",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_WIND_SENSITIVITY,
+                        default=DEFAULT_WIND_SENSITIVITY,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.0, max=0.5, step=0.01,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_RAIN_HEAT_LOSS_MULTIPLIER,
+                        default=DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1.0, max=1.5, step=0.01,
+                            mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
                 }
@@ -603,6 +711,51 @@ class HeatPumpOptimizerOptionsFlow(config_entries.OptionsFlow):
                         selector.NumberSelectorConfig(
                             min=0.1, max=1.0, step=0.05,
                             mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    # DHW options editable at runtime
+                    vol.Optional(
+                        CONF_DHW_SETPOINT,
+                        default=current.get(CONF_DHW_SETPOINT, DEFAULT_DHW_SETPOINT),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=40, max=65, step=1,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DHW_MIN_TEMP,
+                        default=current.get(CONF_DHW_MIN_TEMP, DEFAULT_DHW_MIN_TEMP),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=35, max=55, step=1,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    # Weather sensitivity editable at runtime
+                    vol.Optional(
+                        CONF_WIND_SENSITIVITY,
+                        default=current.get(
+                            CONF_WIND_SENSITIVITY, DEFAULT_WIND_SENSITIVITY
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.0, max=0.5, step=0.01,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_RAIN_HEAT_LOSS_MULTIPLIER,
+                        default=current.get(
+                            CONF_RAIN_HEAT_LOSS_MULTIPLIER,
+                            DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=1.0, max=1.5, step=0.01,
+                            mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
                 }

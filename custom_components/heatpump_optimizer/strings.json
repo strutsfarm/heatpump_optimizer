@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Heat Pump Optimizer Setup",
-        "description": "Configure your heat pump optimizer. You need a Tibber API token (get one at https://developer.tibber.com) and a weather entity. Optionally add solar radiation and floor heating return temperature sensors for the enhanced two-zone model.",
+        "description": "Configure your heat pump optimizer. You need a Tibber API token (get one at https://developer.tibber.com) and a weather entity. Optionally add solar radiation, floor heating return temperature, and DHW temperature sensors.",
         "data": {
           "name": "Integration name",
           "tibber_token": "Tibber API token",
@@ -13,7 +13,8 @@
           "heat_pump_entity": "Heat pump climate entity (optional)",
           "heat_pump_switch_entity": "Heat pump switch entity (optional)",
           "solar_radiation_entity": "Solar radiation sensor (optional, W/m²)",
-          "floor_return_temp_entity": "Floor heating return temperature sensor (optional)"
+          "floor_return_temp_entity": "Floor heating return temperature sensor (optional)",
+          "dhw_temp_entity": "DHW (hot water) temperature sensor (optional)"
         }
       },
       "temperature": {
@@ -61,6 +62,24 @@
           "solar_orientation_factor": "Solar orientation factor (1.0=full south)",
           "solar_heat_gain_coefficient": "Solar heat gain coefficient (SHGC)"
         }
+      },
+      "dhw": {
+        "title": "Domestic Hot Water (DHW) Configuration",
+        "description": "Optional: Configure DHW tank parameters. The optimizer will coordinate DHW heating with space heating, prioritizing cheap electricity periods while maintaining minimum temperature. Skip if you don't have a DHW tank connected to the heat pump.",
+        "data": {
+          "dhw_tank_volume": "DHW tank volume",
+          "dhw_setpoint": "DHW target temperature",
+          "dhw_min_temperature": "DHW minimum temperature (safety)",
+          "dhw_daily_consumption": "Estimated daily hot water consumption"
+        }
+      },
+      "weather_sensitivity": {
+        "title": "Weather Sensitivity Parameters",
+        "description": "Configure how wind and rain affect heat loss predictions. These parameters control the predictive optimization: higher wind sensitivity means the optimizer pre-heats more before windy periods.",
+        "data": {
+          "wind_sensitivity_factor": "Wind sensitivity (heat loss increase per m/s)",
+          "rain_heat_loss_multiplier": "Rain heat loss multiplier (1.0=no effect)"
+        }
       }
     },
     "error": {
@@ -74,7 +93,7 @@
     "step": {
       "init": {
         "title": "Heat Pump Optimizer Options",
-        "description": "Adjust temperature targets, optimization weights, and zone/solar parameters.",
+        "description": "Adjust temperature targets, optimization weights, zone/solar parameters, DHW settings, and weather sensitivity.",
         "data": {
           "target_temperature": "Target temperature (°C)",
           "min_temperature": "Minimum temperature (°C)",
@@ -84,7 +103,11 @@
           "optimization_interval": "Optimization interval (minutes)",
           "radiator_power_fraction": "Radiator power fraction",
           "window_area": "Window area (m²)",
-          "solar_heat_gain_coefficient": "Solar heat gain coefficient (SHGC)"
+          "solar_heat_gain_coefficient": "Solar heat gain coefficient (SHGC)",
+          "dhw_setpoint": "DHW target temperature (°C)",
+          "dhw_min_temperature": "DHW minimum temperature (°C)",
+          "wind_sensitivity_factor": "Wind sensitivity factor",
+          "rain_heat_loss_multiplier": "Rain heat loss multiplier"
         }
       }
     }

@@ -3,7 +3,8 @@ run_optimization:
   description: >-
     Manually trigger the heat pump cost optimization. This will fetch
     the latest electricity prices and weather forecast, then compute
-    the optimal heat pump schedule for the next 24 hours.
+    the optimal heat pump schedule for the next 24 hours using predictive
+    MPC with solar/wind/rain anticipation and DHW coordination.
 
 set_mode:
   name: Set Optimizer Mode
@@ -14,7 +15,7 @@ set_mode:
       name: Mode
       description: >-
         The operating mode to set. Available modes:
-        - auto: Full MPC optimization (recommended)
+        - auto: Full MPC optimization with predictive weather anticipation (recommended)
         - comfort: Maintain comfort temperature, ignore price optimization
         - economy: Aggressive cost savings, wider temperature swings allowed
         - boost: Maximum heating power
@@ -35,7 +36,8 @@ set_thermal_parameters:
   description: >-
     Update the thermal model parameters used by the optimizer.
     Useful for fine-tuning the model to match your house's actual
-    thermal behavior. Supports both single-zone and two-zone parameters.
+    thermal behavior. Supports single-zone, two-zone, DHW, and
+    weather sensitivity parameters.
   fields:
     house_thermal_mass:
       name: House Thermal Mass
@@ -171,3 +173,76 @@ set_thermal_parameters:
           min: 0.1
           max: 1.0
           step: 0.05
+    dhw_tank_volume:
+      name: DHW Tank Volume
+      description: >-
+        Volume of the domestic hot water storage tank in liters.
+      required: false
+      example: 200
+      selector:
+        number:
+          min: 50
+          max: 500
+          step: 10
+          unit_of_measurement: "L"
+    dhw_setpoint:
+      name: DHW Setpoint Temperature
+      description: >-
+        Target temperature for the domestic hot water tank in °C.
+      required: false
+      example: 55
+      selector:
+        number:
+          min: 40
+          max: 65
+          step: 1
+          unit_of_measurement: "°C"
+    dhw_min_temperature:
+      name: DHW Minimum Temperature
+      description: >-
+        Minimum acceptable DHW tank temperature in °C.
+        Below this, DHW heating is prioritized.
+      required: false
+      example: 45
+      selector:
+        number:
+          min: 35
+          max: 55
+          step: 1
+          unit_of_measurement: "°C"
+    dhw_daily_consumption:
+      name: DHW Daily Consumption
+      description: >-
+        Estimated daily hot water consumption in liters/day.
+      required: false
+      example: 150
+      selector:
+        number:
+          min: 50
+          max: 500
+          step: 10
+          unit_of_measurement: "L/day"
+    wind_sensitivity_factor:
+      name: Wind Sensitivity Factor
+      description: >-
+        How much wind increases heat loss. 0.15 means 15% more heat
+        loss per m/s of wind speed. Adjusts convective heat transfer.
+      required: false
+      example: 0.15
+      selector:
+        number:
+          min: 0.0
+          max: 0.5
+          step: 0.01
+    rain_heat_loss_multiplier:
+      name: Rain Heat Loss Multiplier
+      description: >-
+        Heat loss multiplier when raining. 1.15 means 15% more heat
+        loss during rain (wet building envelope effect).
+      required: false
+      example: 1.15
+      selector:
+        number:
+          min: 1.0
+          max: 1.5
+          step: 0.01

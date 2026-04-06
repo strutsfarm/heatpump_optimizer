@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Värmepumpsoptimering - Konfiguration",
-        "description": "Konfigurera din värmepumpsoptimering. Du behöver en Tibber API-nyckel (hämta på https://developer.tibber.com) och en väderentitet. Valfritt: lägg till solstrålnings- och golvvärme-returtemperatursensorer för den utökade tvåzonsmodellen.",
+        "description": "Konfigurera din värmepumpsoptimering. Du behöver en Tibber API-nyckel (hämta på https://developer.tibber.com) och en väderentitet. Valfritt: lägg till solstrålnings-, golvvärme-returtemperatur- och varmvattensensorer.",
         "data": {
           "name": "Integrationsnamn",
           "tibber_token": "Tibber API-nyckel",
@@ -13,7 +13,8 @@
           "heat_pump_entity": "Värmepump klimatentitet (valfritt)",
           "heat_pump_switch_entity": "Värmepump strömbrytare (valfritt)",
           "solar_radiation_entity": "Solstrålningssensor (valfritt, W/m²)",
-          "floor_return_temp_entity": "Golvvärme returtemperatursensor (valfritt)"
+          "floor_return_temp_entity": "Golvvärme returtemperatursensor (valfritt)",
+          "dhw_temp_entity": "Varmvattentemperatursensor (valfritt)"
         }
       },
       "temperature": {
@@ -61,6 +62,24 @@
           "solar_orientation_factor": "Solorientering (1.0=full söder)",
           "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)"
         }
+      },
+      "dhw": {
+        "title": "Varmvattenkonfiguration (VVB)",
+        "description": "Valfritt: Konfigurera varmvattenberedare. Optimeraren samordnar varmvattenuppvärmning med rumsuppvärmning och värmer vatten under billiga elperioder med bibehållen minimiuttemperatur.",
+        "data": {
+          "dhw_tank_volume": "VVB-tankvolym (L)",
+          "dhw_setpoint": "VVB måltemperatur (°C)",
+          "dhw_min_temperature": "VVB minimiutemperatur (°C)",
+          "dhw_daily_consumption": "Daglig varmvattenförbrukning (L/dag)"
+        }
+      },
+      "weather_sensitivity": {
+        "title": "Väderkänslighetsparametrar",
+        "description": "Konfigurera hur vind och regn påverkar värmeförlustprognoser. Högre vindkänslighet = mer förvärming innan blåsiga perioder.",
+        "data": {
+          "wind_sensitivity_factor": "Vindkänslighet (värmeförlustökning per m/s)",
+          "rain_heat_loss_multiplier": "Regn värmeförlustmultiplikator"
+        }
       }
     },
     "error": {
@@ -74,7 +93,7 @@
     "step": {
       "init": {
         "title": "Värmepumpsoptimering - Alternativ",
-        "description": "Justera temperaturmål, optimeringsvikter och zon-/solparametrar.",
+        "description": "Justera temperaturmål, optimeringsvikter, zon-/solparametrar, VVB-inställningar och väderkänslighet.",
         "data": {
           "target_temperature": "Måltemperatur (°C)",
           "min_temperature": "Lägsta temperatur (°C)",
@@ -84,7 +103,11 @@
           "optimization_interval": "Optimeringsintervall (min)",
           "radiator_power_fraction": "Radiatoreffektandel",
           "window_area": "Fönsterarea (m²)",
-          "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)"
+          "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)",
+          "dhw_setpoint": "VVB måltemperatur (°C)",
+          "dhw_min_temperature": "VVB minimiutemperatur (°C)",
+          "wind_sensitivity_factor": "Vindkänslighet",
+          "rain_heat_loss_multiplier": "Regn värmeförlustmultiplikator"
         }
       }
     }
