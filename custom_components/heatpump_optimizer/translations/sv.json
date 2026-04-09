@@ -1,0 +1,115 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Värmepumpsoptimering - Konfiguration",
+        "description": "Konfigurera din värmepumpsoptimering. Du behöver en Tibber API-nyckel (hämta på https://developer.tibber.com) och en väderentitet. Valfritt: lägg till solstrålnings-, golvvärme-returtemperatur- och varmvattensensorer.",
+        "data": {
+          "name": "Integrationsnamn",
+          "tibber_token": "Tibber API-nyckel",
+          "weather_entity": "Väderentitet (för prognoser)",
+          "indoor_temp_entity": "Inomhustemperatursensor (valfritt)",
+          "outdoor_temp_entity": "Utomhustemperatursensor (valfritt)",
+          "heat_pump_entity": "Värmepump klimatentitet (valfritt)",
+          "heat_pump_switch_entity": "Värmepump strömbrytare (valfritt)",
+          "solar_radiation_entity": "Solstrålningssensor (valfritt, W/m²)",
+          "floor_return_temp_entity": "Golvvärme returtemperatursensor (valfritt)",
+          "dhw_temp_entity": "Varmvattentemperatursensor (valfritt)"
+        }
+      },
+      "temperature": {
+        "title": "Temperaturinställningar",
+        "description": "Konfigurera önskat temperaturintervall och komfortinställningar.",
+        "data": {
+          "target_temperature": "Måltemperatur",
+          "min_temperature": "Lägsta tillåtna temperatur",
+          "max_temperature": "Högsta tillåtna temperatur",
+          "comfort_temp_day": "Komforttemperatur dag",
+          "comfort_temp_night": "Komforttemperatur natt",
+          "day_start_hour": "Dag börjar (timme)",
+          "day_end_hour": "Dag slutar (timme)"
+        }
+      },
+      "thermal": {
+        "title": "Termisk modell & Optimering",
+        "description": "Konfigurera husets termiska egenskaper och värmepump. Standardvärdena fungerar för ett typiskt välisolerat skandinaviskt hus med golvvärme i platta. Justera vid behov.",
+        "data": {
+          "house_thermal_mass": "Husets termiska massa (kWh/°C)",
+          "house_heat_loss_coefficient": "Värmeförlustkoefficient (kW/°C)",
+          "slab_thermal_mass": "Plattans termiska massa (kWh/°C)",
+          "slab_heat_transfer": "Platta-till-rum värmeöverföring (kW/°C)",
+          "heat_pump_cop_nominal": "Värmepumpens nominella COP",
+          "heat_pump_max_power": "Värmepump max effekt (kW)",
+          "heat_pump_min_power": "Värmepump min effekt (kW)",
+          "optimization_interval": "Optimeringsintervall (min)",
+          "price_weight": "Prisvikt",
+          "comfort_weight": "Komfortvikt"
+        }
+      },
+      "zones": {
+        "title": "Tvåzons- & Solkonfiguration",
+        "description": "Valfritt: Konfigurera tvåzonsuppvärmning (övervåning radiatorer + nedervåning golvvärme) och parametrar för solvärme. Lämna standardvärden om du inte behöver tvåzonsmodellen.",
+        "data": {
+          "upper_floor_thermal_mass": "Övervåning termisk massa (kWh/°C)",
+          "lower_floor_thermal_mass": "Nedervåning termisk massa (kWh/°C)",
+          "upper_floor_heat_loss": "Övervåning värmeförlust (kW/°C)",
+          "lower_floor_heat_loss": "Nedervåning värmeförlust (kW/°C)",
+          "inter_zone_heat_transfer": "Värmeöverföring mellan zoner (kW/°C)",
+          "radiator_power_fraction": "Radiatoreffektandel",
+          "upper_floor_area_ratio": "Övervåning ytförhållande",
+          "buffer_tank_volume": "Buffertankvolym (L)",
+          "window_area": "Fönsterarea (m²)",
+          "solar_orientation_factor": "Solorientering (1.0=full söder)",
+          "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)"
+        }
+      },
+      "dhw": {
+        "title": "Varmvattenkonfiguration (VVB)",
+        "description": "Valfritt: Konfigurera varmvattenberedare. Optimeraren samordnar varmvattenuppvärmning med rumsuppvärmning och värmer vatten under billiga elperioder med bibehållen minimiuttemperatur.",
+        "data": {
+          "dhw_tank_volume": "VVB-tankvolym (L)",
+          "dhw_setpoint": "VVB måltemperatur (°C)",
+          "dhw_min_temperature": "VVB minimiutemperatur (°C)",
+          "dhw_daily_consumption": "Daglig varmvattenförbrukning (L/dag)"
+        }
+      },
+      "weather_sensitivity": {
+        "title": "Väderkänslighetsparametrar",
+        "description": "Konfigurera hur vind och regn påverkar värmeförlustprognoser. Högre vindkänslighet = mer förvärming innan blåsiga perioder.",
+        "data": {
+          "wind_sensitivity_factor": "Vindkänslighet (värmeförlustökning per m/s)",
+          "rain_heat_loss_multiplier": "Regn värmeförlustmultiplikator"
+        }
+      }
+    },
+    "error": {
+      "invalid_tibber_token": "Ogiltig Tibber API-nyckel. Kontrollera och försök igen."
+    },
+    "abort": {
+      "already_configured": "Denna integration är redan konfigurerad."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Värmepumpsoptimering - Alternativ",
+        "description": "Justera temperaturmål, optimeringsvikter, zon-/solparametrar, VVB-inställningar och väderkänslighet.",
+        "data": {
+          "target_temperature": "Måltemperatur (°C)",
+          "min_temperature": "Lägsta temperatur (°C)",
+          "max_temperature": "Högsta temperatur (°C)",
+          "price_weight": "Prisvikt",
+          "comfort_weight": "Komfortvikt",
+          "optimization_interval": "Optimeringsintervall (min)",
+          "radiator_power_fraction": "Radiatoreffektandel",
+          "window_area": "Fönsterarea (m²)",
+          "solar_heat_gain_coefficient": "SHGC (solvärmekoefficient)",
+          "dhw_setpoint": "VVB måltemperatur (°C)",
+          "dhw_min_temperature": "VVB minimiutemperatur (°C)",
+          "wind_sensitivity_factor": "Vindkänslighet",
+          "rain_heat_loss_multiplier": "Regn värmeförlustmultiplikator"
+        }
+      }
+    }
+  }
+}
