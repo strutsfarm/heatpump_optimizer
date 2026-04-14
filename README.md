@@ -341,3 +341,45 @@ custom_components/heatpump_optimizer/
 ## License
 
 MIT
+
+## ECL110 MQTT Control (Heat Pump ON/OFF + Displace)
+
+This integration can now drive an ECL110-compatible controller using two explicit outputs from MPC:
+
+- `heat_pump_on` (boolean): whether supply should be enabled
+- `displace_value` (°C): parallel shift command for ECL110 heat curve
+
+### MQTT command payload
+
+The coordinator publishes a JSON payload (via Home Assistant `mqtt.publish`) to the configured command topic:
+
+```json
+{
+  "source": "heatpump_optimizer",
+  "reason": "scheduled_update",
+  "timestamp": "2026-01-01T12:00:00+00:00",
+  "command": {
+    "type": "ecl110_control",
+    "heat_pump_on": true,
+    "displace": 3.5
+  },
+  "context": {
+    "price": 1.23,
+    "mode": "pre_heat",
+    "pre_heat_urgency": 0.6
+  }
+}
+```
+
+### New configuration options
+
+- `ecl110_command_topic`
+- `ecl110_state_topic`
+- `ecl110_mqtt_qos`
+- `ecl110_mqtt_retain`
+- `ecl110_displace_min` / `ecl110_displace_max`
+- `ecl110_pid_time_constant_hours`
+
+### PI/PID dynamics handling
+
+ECL110 PI/PID response is approximated as a first-order lag, so displace commands are smoothed before dispatch and an `effective_displace` state is tracked for observability.

@@ -64,6 +64,9 @@ from .const import (
     DEFAULT_DHW_DAILY_CONSUMPTION,
     DEFAULT_WIND_SENSITIVITY,
     DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER,
+    DEFAULT_ECL110_DISPLACE_MIN,
+    DEFAULT_ECL110_DISPLACE_MAX,
+    DEFAULT_ECL110_PID_TIME_CONSTANT,
     WIND_CHILL_FACTOR,
     RAIN_COOLING_FACTOR,
 )
@@ -112,6 +115,11 @@ class ThermalParameters:
     # Weather sensitivity parameters (configurable)
     wind_sensitivity: float = DEFAULT_WIND_SENSITIVITY  # fraction per m/s
     rain_heat_loss_multiplier: float = DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER  # multiplier
+
+    # ECL110 displace / PID approximation
+    ecl110_displace_min: float = DEFAULT_ECL110_DISPLACE_MIN
+    ecl110_displace_max: float = DEFAULT_ECL110_DISPLACE_MAX
+    ecl110_pid_time_constant_hours: float = DEFAULT_ECL110_PID_TIME_CONSTANT
 
     # Heat pump parameters
     cop_nominal: float = DEFAULT_HEAT_PUMP_COP_NOMINAL
@@ -181,6 +189,9 @@ class ThermalParameters:
             CONF_DHW_DAILY_CONSUMPTION,
             CONF_WIND_SENSITIVITY,
             CONF_RAIN_HEAT_LOSS_MULTIPLIER,
+            CONF_ECL110_DISPLACE_MIN,
+            CONF_ECL110_DISPLACE_MAX,
+            CONF_ECL110_PID_TIME_CONSTANT,
             CONF_DHW_TEMP_ENTITY,
         )
 
@@ -272,6 +283,16 @@ class ThermalParameters:
             rain_heat_loss_multiplier=config.get(
                 CONF_RAIN_HEAT_LOSS_MULTIPLIER, DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER
             ),
+            # ECL110
+            ecl110_displace_min=config.get(
+                CONF_ECL110_DISPLACE_MIN, DEFAULT_ECL110_DISPLACE_MIN
+            ),
+            ecl110_displace_max=config.get(
+                CONF_ECL110_DISPLACE_MAX, DEFAULT_ECL110_DISPLACE_MAX
+            ),
+            ecl110_pid_time_constant_hours=config.get(
+                CONF_ECL110_PID_TIME_CONSTANT, DEFAULT_ECL110_PID_TIME_CONSTANT
+            ),
             # Heat pump
             cop_nominal=config.get(
                 CONF_HEAT_PUMP_COP_NOMINAL, DEFAULT_HEAT_PUMP_COP_NOMINAL
@@ -320,6 +341,10 @@ class ThermalState:
 
     # DHW state
     dhw_temperature: float = 55.0  # °C current DHW tank temperature
+
+    # ECL110 control state
+    ecl110_displace_command: float = 0.0  # °C requested parallel shift
+    ecl110_effective_displace: float = 0.0  # °C filtered PI/PID effect
 
 
 # DHW draw pattern: normalized hourly multipliers (24 values, sum=24)
@@ -438,6 +463,31 @@ class ThermalModel:
         lower = total * (1.0 - self.params.solar_upper_fraction)
         return upper, lower
 
+    def update_ecl110_displace_state(
+        self,
+        state: ThermalState,
+        displace_command: float,
+        dt_hours: float = 0.25,
+    ) -> ThermalState:
+        """Update ECL110 effective displace with first-order PI/PID-like lag.
+
+        The manual documents that ECL110 applies PI-style loop dynamics. We model
+        this as a first-order response from commanded to effective displace.
+        """
+        p = self.params
+        cmd = float(np.clip(displace_command, p.ecl110_displace_min, p.ecl110_displace_max))
+        tau = max(0.1, p.ecl110_pid_time_constant_hours)
+        alpha = float(np.clip(dt_hours / tau, 0.0, 1.0))
+
+        effective = state.ecl110_effective_displace + alpha * (
+            cmd - state.ecl110_effective_displace
+        )
+        state.ecl110_displace_command = cmd
+        state.ecl110_effective_displace = float(
+            np.clip(effective, p.ecl110_displace_min, p.ecl110_displace_max)
+        )
+        return state
+
     # ------------------------------------------------------------------
     # DHW tank model
     # ------------------------------------------------------------------
@@ -539,6 +589,8 @@ class ThermalModel:
             floor_return_temperature=state.floor_return_temperature,
             solar_radiation=solar_radiation,
             dhw_temperature=state.dhw_temperature,
+            ecl110_displace_command=state.ecl110_displace_command,
+            ecl110_effective_displace=state.ecl110_effective_displace,
         )
 
     # ------------------------------------------------------------------
@@ -630,14 +682,14 @@ class ThermalModel:
 
         return ThermalState(
             room_temperature=avg_room,
-            slab_temperature=new_slab,
-            outdoor_temperature=outdoor_temp,
             upper_floor_temperature=new_upper,
             lower_floor_temperature=new_lower,
             buffer_tank_temperature=new_buf,
             floor_return_temperature=state.floor_return_temperature,
             solar_radiation=solar_radiation,
             dhw_temperature=state.dhw_temperature,
+            ecl110_displace_command=state.ecl110_displace_command,
+            ecl110_effective_displace=state.ecl110_effective_displace,
         )
 
     # ------------------------------------------------------------------

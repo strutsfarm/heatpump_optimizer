@@ -14,7 +14,14 @@
           "heat_pump_switch_entity": "Värmepump strömbrytare (valfritt)",
           "solar_radiation_entity": "Solstrålningssensor (valfritt, W/m²)",
           "floor_return_temp_entity": "Golvvärme returtemperatursensor (valfritt)",
-          "dhw_temp_entity": "Varmvattentemperatursensor (valfritt)"
+          "dhw_temp_entity": "Varmvattentemperatursensor (valfritt)",
+          "ecl110_command_topic": "ECL110 MQTT kommandotopic",
+          "ecl110_state_topic": "ECL110 MQTT statustopic",
+          "ecl110_mqtt_qos": "ECL110 MQTT QoS",
+          "ecl110_mqtt_retain": "Behåll ECL110 MQTT-meddelanden",
+          "ecl110_displace_min": "ECL110 displace minimum (°C)",
+          "ecl110_displace_max": "ECL110 displace maximum (°C)",
+          "ecl110_pid_time_constant_hours": "ECL110 PI/PID tidskonstant (timmar)"
         }
       },
       "temperature": {
@@ -107,7 +114,14 @@
           "dhw_setpoint": "VVB måltemperatur (°C)",
           "dhw_min_temperature": "VVB minimiutemperatur (°C)",
           "wind_sensitivity_factor": "Vindkänslighet",
-          "rain_heat_loss_multiplier": "Regn värmeförlustmultiplikator"
+          "rain_heat_loss_multiplier": "Regn värmeförlustmultiplikator",
+          "ecl110_command_topic": "ECL110 MQTT kommandotopic",
+          "ecl110_state_topic": "ECL110 MQTT statustopic",
+          "ecl110_mqtt_qos": "ECL110 MQTT QoS",
+          "ecl110_mqtt_retain": "Behåll ECL110 MQTT-meddelanden",
+          "ecl110_displace_min": "ECL110 displace minimum (°C)",
+          "ecl110_displace_max": "ECL110 displace maximum (°C)",
+          "ecl110_pid_time_constant_hours": "ECL110 PI/PID tidskonstant (timmar)"
         }
       }
     }

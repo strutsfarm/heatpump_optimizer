@@ -67,6 +67,8 @@ async def async_setup_entry(
         DHWHeatingCostSensor(coordinator, entry),
         # Predictive insight sensors
         PredictiveInsightSensor(coordinator, entry),
+        ECL110DisplaceSensor(coordinator, entry),
+        ECL110EffectiveDisplaceSensor(coordinator, entry),
     ]
 
     async_add_entities(entities)
@@ -396,6 +398,8 @@ class HeatPumpActionSensor(HeatPumpOptimizerSensorBase):
                 "setpoint": action.get("setpoint"),
                 "price": action.get("price"),
                 "power_normalized": action.get("power_normalized"),
+                "heat_pump_on": action.get("heat_pump_on"),
+                "ecl110_displace": action.get("displace_value"),
             }
             if "upper_setpoint" in action:
                 attrs["upper_floor_setpoint"] = action["upper_setpoint"]
@@ -709,5 +713,55 @@ class PredictiveInsightSensor(HeatPumpOptimizerSensorBase):
                 "future_solar_6_12h_kwh": info.get("future_solar_6_12h_kwh"),
                 "avg_future_wind_ms": info.get("avg_future_wind_ms"),
                 "avg_future_precip_mmh": info.get("avg_future_precip_mmh"),
+            }
+        return {}
+
+
+class ECL110DisplaceSensor(HeatPumpOptimizerSensorBase):
+    """Current ECL110 displace command value."""
+
+    _attr_icon = "mdi:tune-vertical"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coordinator, entry):
+        super().__init__(coordinator, entry, "ecl110_displace", "ECL110 Displace")
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("ecl110_displace")
+            return round(val, 1) if val is not None else None
+        return None
+
+
+class ECL110EffectiveDisplaceSensor(HeatPumpOptimizerSensorBase):
+    """Modeled effective displace after ECL110 PI/PID dynamics."""
+
+    _attr_icon = "mdi:chart-bell-curve"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coordinator, entry):
+        super().__init__(
+            coordinator,
+            entry,
+            "ecl110_effective_displace",
+            "ECL110 Effective Displace",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        if self.coordinator.data:
+            val = self.coordinator.data.get("ecl110_effective_displace")
+            return round(val, 1) if val is not None else None
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        if self.coordinator.data:
+            return {
+                "command_topic": self.coordinator.data.get("ecl110_command_topic"),
+                "state_topic": self.coordinator.data.get("ecl110_state_topic"),
             }
         return {}

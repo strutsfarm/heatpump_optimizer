@@ -24,6 +24,13 @@ from .const import (
     CONF_SOLAR_RADIATION_ENTITY,
     CONF_FLOOR_RETURN_TEMP_ENTITY,
     CONF_DHW_TEMP_ENTITY,
+    CONF_ECL110_COMMAND_TOPIC,
+    CONF_ECL110_STATE_TOPIC,
+    CONF_ECL110_QOS,
+    CONF_ECL110_RETAIN,
+    CONF_ECL110_DISPLACE_MIN,
+    CONF_ECL110_DISPLACE_MAX,
+    CONF_ECL110_PID_TIME_CONSTANT,
     CONF_TARGET_TEMP,
     CONF_MIN_TEMP,
     CONF_MAX_TEMP,
@@ -89,6 +96,13 @@ from .const import (
     DEFAULT_DHW_SETPOINT,
     DEFAULT_DHW_MIN_TEMP,
     DEFAULT_DHW_DAILY_CONSUMPTION,
+    DEFAULT_ECL110_COMMAND_TOPIC,
+    DEFAULT_ECL110_STATE_TOPIC,
+    DEFAULT_ECL110_QOS,
+    DEFAULT_ECL110_RETAIN,
+    DEFAULT_ECL110_DISPLACE_MIN,
+    DEFAULT_ECL110_DISPLACE_MAX,
+    DEFAULT_ECL110_PID_TIME_CONSTANT,
     DEFAULT_WIND_SENSITIVITY,
     DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER,
     DEFAULT_OPTIMIZATION_HORIZON,
@@ -127,7 +141,7 @@ async def validate_tibber_token(token: str) -> bool:
 class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Heat Pump Optimizer."""
 
-    VERSION = 3  # bumped for DHW + predictive MPC schema
+    VERSION = 4  # bumped for ECL110 displace control schema
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -182,6 +196,57 @@ class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Optional(CONF_DHW_TEMP_ENTITY): selector.EntitySelector(
                         selector.EntitySelectorConfig(
                             domain="sensor", device_class="temperature"
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_COMMAND_TOPIC,
+                        default=DEFAULT_ECL110_COMMAND_TOPIC,
+                    ): str,
+                    vol.Optional(
+                        CONF_ECL110_STATE_TOPIC,
+                        default=DEFAULT_ECL110_STATE_TOPIC,
+                    ): str,
+                    vol.Optional(
+                        CONF_ECL110_QOS,
+                        default=DEFAULT_ECL110_QOS,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=2, step=1,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_RETAIN,
+                        default=DEFAULT_ECL110_RETAIN,
+                    ): bool,
+                    vol.Optional(
+                        CONF_ECL110_DISPLACE_MIN,
+                        default=DEFAULT_ECL110_DISPLACE_MIN,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=-30, max=0, step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_DISPLACE_MAX,
+                        default=DEFAULT_ECL110_DISPLACE_MAX,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=30, step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_PID_TIME_CONSTANT,
+                        default=DEFAULT_ECL110_PID_TIME_CONSTANT,
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.25, max=6.0, step=0.25,
+                            unit_of_measurement="h",
+                            mode=selector.NumberSelectorMode.BOX,
                         )
                     ),
                 }
@@ -755,6 +820,69 @@ class HeatPumpOptimizerOptionsFlow(config_entries.OptionsFlow):
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
                             min=1.0, max=1.5, step=0.01,
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    # ECL110 MQTT displace control options
+                    vol.Optional(
+                        CONF_ECL110_COMMAND_TOPIC,
+                        default=current.get(
+                            CONF_ECL110_COMMAND_TOPIC, DEFAULT_ECL110_COMMAND_TOPIC
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_ECL110_STATE_TOPIC,
+                        default=current.get(
+                            CONF_ECL110_STATE_TOPIC, DEFAULT_ECL110_STATE_TOPIC
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_ECL110_QOS,
+                        default=current.get(CONF_ECL110_QOS, DEFAULT_ECL110_QOS),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=2, step=1,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_RETAIN,
+                        default=current.get(CONF_ECL110_RETAIN, DEFAULT_ECL110_RETAIN),
+                    ): bool,
+                    vol.Optional(
+                        CONF_ECL110_DISPLACE_MIN,
+                        default=current.get(
+                            CONF_ECL110_DISPLACE_MIN, DEFAULT_ECL110_DISPLACE_MIN
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=-30, max=0, step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_DISPLACE_MAX,
+                        default=current.get(
+                            CONF_ECL110_DISPLACE_MAX, DEFAULT_ECL110_DISPLACE_MAX
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=30, step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_ECL110_PID_TIME_CONSTANT,
+                        default=current.get(
+                            CONF_ECL110_PID_TIME_CONSTANT,
+                            DEFAULT_ECL110_PID_TIME_CONSTANT,
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.25, max=6.0, step=0.25,
+                            unit_of_measurement="h",
                             mode=selector.NumberSelectorMode.BOX,
                         )
                     ),

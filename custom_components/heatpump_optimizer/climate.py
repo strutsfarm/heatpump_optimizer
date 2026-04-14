@@ -174,6 +174,14 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
                 "optimization_status"
             )
             attrs["slab_temperature"] = self.coordinator.data.get("slab_temperature")
+            attrs["heat_pump_on"] = action.get("heat_pump_on")
+            attrs["ecl110_displace"] = action.get("displace_value")
+            attrs["ecl110_effective_displace"] = self.coordinator.data.get(
+                "ecl110_effective_displace"
+            )
+            attrs["ecl110_command_topic"] = self.coordinator.data.get(
+                "ecl110_command_topic"
+            )
             attrs["outdoor_temperature"] = self.coordinator.data.get(
                 "outdoor_temperature"
             )
@@ -228,13 +236,23 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
 
         return attrs
 
+    async def _async_publish_displace_from_current_action(self, reason: str) -> None:
+        """Publish current displace command over MQTT through the coordinator."""
+        try:
+            await self.coordinator.async_publish_current_action(reason=reason)
+        except Exception as err:
+            _LOGGER.warning("Failed to publish ECL110 displace command: %s", err)
+
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         if hvac_mode == HVACMode.OFF:
             await self.coordinator.async_set_mode(MODE_OFF)
+            await self._async_publish_displace_from_current_action("manual_hvac_mode")
         elif hvac_mode == HVACMode.AUTO:
             await self.coordinator.async_set_mode(MODE_AUTO)
+            await self._async_publish_displace_from_current_action("manual_hvac_mode")
         elif hvac_mode == HVACMode.HEAT:
             await self.coordinator.async_set_mode(MODE_COMFORT)
+            await self._async_publish_displace_from_current_action("manual_hvac_mode")
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get(ATTR_TEMPERATURE)
@@ -243,6 +261,7 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
             self.coordinator._opt_config.target_temp = temp
             _LOGGER.info("Target temperature set to %.1f°C", temp)
             await self.coordinator.async_request_refresh()
+            await self._async_publish_displace_from_current_action("manual_target_temp")
 
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         mode_map = {
@@ -253,9 +272,12 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
         }
         mode = mode_map.get(preset_mode, MODE_AUTO)
         await self.coordinator.async_set_mode(mode)
+        await self._async_publish_displace_from_current_action("manual_preset")
 
     async def async_turn_on(self) -> None:
         await self.coordinator.async_set_mode(MODE_AUTO)
+        await self._async_publish_displace_from_current_action("manual_turn_on")
 
     async def async_turn_off(self) -> None:
         await self.coordinator.async_set_mode(MODE_OFF)
+        await self._async_publish_displace_from_current_action("manual_turn_off")

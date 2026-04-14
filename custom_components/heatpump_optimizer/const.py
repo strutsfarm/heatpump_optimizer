@@ -22,6 +22,15 @@ CONF_FLOOR_RETURN_TEMP_ENTITY: Final = "floor_return_temp_entity"
 # DHW sensor configuration
 CONF_DHW_TEMP_ENTITY: Final = "dhw_temp_entity"
 
+# ECL110 / MQTT configuration
+CONF_ECL110_COMMAND_TOPIC: Final = "ecl110_command_topic"
+CONF_ECL110_STATE_TOPIC: Final = "ecl110_state_topic"
+CONF_ECL110_QOS: Final = "ecl110_mqtt_qos"
+CONF_ECL110_RETAIN: Final = "ecl110_mqtt_retain"
+CONF_ECL110_DISPLACE_MIN: Final = "ecl110_displace_min"
+CONF_ECL110_DISPLACE_MAX: Final = "ecl110_displace_max"
+CONF_ECL110_PID_TIME_CONSTANT: Final = "ecl110_pid_time_constant_hours"
+
 # Temperature settings
 CONF_TARGET_TEMP: Final = "target_temperature"
 CONF_MIN_TEMP: Final = "min_temperature"
@@ -118,6 +127,15 @@ DEFAULT_DHW_DAILY_CONSUMPTION: Final = 150.0  # liters/day average household
 DEFAULT_WIND_SENSITIVITY: Final = 0.15  # 15% heat loss increase per m/s wind
 DEFAULT_RAIN_HEAT_LOSS_MULTIPLIER: Final = 1.15  # 15% increase when raining
 
+# ECL110 defaults (manual "Displace" = parallel heat-curve shift in °C)
+DEFAULT_ECL110_COMMAND_TOPIC: Final = "ecl110/command"
+DEFAULT_ECL110_STATE_TOPIC: Final = "ecl110/state"
+DEFAULT_ECL110_QOS: Final = 1
+DEFAULT_ECL110_RETAIN: Final = False
+DEFAULT_ECL110_DISPLACE_MIN: Final = -20.0
+DEFAULT_ECL110_DISPLACE_MAX: Final = 20.0
+DEFAULT_ECL110_PID_TIME_CONSTANT: Final = 1.5  # hours, first-order approximation
+
 DEFAULT_OPTIMIZATION_HORIZON: Final = 24  # hours
 DEFAULT_OPTIMIZATION_INTERVAL: Final = 30  # minutes
 DEFAULT_TIME_STEP: Final = 15  # minutes
@@ -156,6 +174,10 @@ ATTR_OUTDOOR_TEMP: Final = "outdoor_temperature"
 ATTR_HEAT_PUMP_STATE: Final = "heat_pump_state"
 ATTR_HEAT_PUMP_SETPOINT: Final = "heat_pump_setpoint"
 ATTR_COP_CURRENT: Final = "current_cop"
+ATTR_HEAT_PUMP_ON: Final = "heat_pump_on"
+ATTR_ECL110_DISPLACE: Final = "ecl110_displace"
+ATTR_ECL110_EFFECTIVE_DISPLACE: Final = "ecl110_effective_displace"
+ATTR_ECL110_COMMAND_PAYLOAD: Final = "ecl110_command_payload"
 
 # Two-zone attributes
 ATTR_UPPER_FLOOR_TEMP: Final = "upper_floor_temperature"

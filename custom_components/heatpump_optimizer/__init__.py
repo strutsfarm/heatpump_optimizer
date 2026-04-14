@@ -75,6 +75,8 @@ SERVICE_SCHEMA_SET_THERMAL_PARAMS = vol.Schema(
         # Weather sensitivity parameters
         vol.Optional("wind_sensitivity_factor"): vol.Coerce(float),
         vol.Optional("rain_heat_loss_multiplier"): vol.Coerce(float),
+        # ECL110 dynamics parameter
+        vol.Optional("ecl110_pid_time_constant_hours"): vol.Coerce(float),
     }
 )
 

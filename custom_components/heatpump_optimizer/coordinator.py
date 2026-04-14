@@ -10,6 +10,7 @@ The coordinator manages:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -17,6 +18,7 @@ from typing import Any
 import aiohttp
 import numpy as np
 
+from homeassistant.components import mqtt
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
@@ -35,6 +37,13 @@ from .const import (
     CONF_SOLAR_RADIATION_ENTITY,
     CONF_FLOOR_RETURN_TEMP_ENTITY,
     CONF_DHW_TEMP_ENTITY,
+    CONF_ECL110_COMMAND_TOPIC,
+    CONF_ECL110_STATE_TOPIC,
+    CONF_ECL110_QOS,
+    CONF_ECL110_RETAIN,
+    CONF_ECL110_DISPLACE_MIN,
+    CONF_ECL110_DISPLACE_MAX,
+    CONF_ECL110_PID_TIME_CONSTANT,
     CONF_TARGET_TEMP,
     CONF_MIN_TEMP,
     CONF_MAX_TEMP,
@@ -68,6 +77,13 @@ from .const import (
     DEFAULT_COMFORT_WEIGHT,
     DEFAULT_DHW_SETPOINT,
     DEFAULT_DHW_MIN_TEMP,
+    DEFAULT_ECL110_COMMAND_TOPIC,
+    DEFAULT_ECL110_STATE_TOPIC,
+    DEFAULT_ECL110_QOS,
+    DEFAULT_ECL110_RETAIN,
+    DEFAULT_ECL110_DISPLACE_MIN,
+    DEFAULT_ECL110_DISPLACE_MAX,
+    DEFAULT_ECL110_PID_TIME_CONSTANT,
     MODE_AUTO,
     MODE_COMFORT,
     MODE_ECONOMY,
@@ -181,6 +197,28 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         # DHW state
         self._dhw_temperature: float | None = None
 
+        # ECL110 MQTT state
+        self._ecl110_command_topic: str = self._config.get(
+            CONF_ECL110_COMMAND_TOPIC, DEFAULT_ECL110_COMMAND_TOPIC
+        )
+        self._ecl110_state_topic: str = self._config.get(
+            CONF_ECL110_STATE_TOPIC, DEFAULT_ECL110_STATE_TOPIC
+        )
+        self._ecl110_qos: int = int(self._config.get(CONF_ECL110_QOS, DEFAULT_ECL110_QOS))
+        self._ecl110_retain: bool = bool(self._config.get(CONF_ECL110_RETAIN, DEFAULT_ECL110_RETAIN))
+        self._ecl110_displace_min: float = float(
+            self._config.get(CONF_ECL110_DISPLACE_MIN, DEFAULT_ECL110_DISPLACE_MIN)
+        )
+        self._ecl110_displace_max: float = float(
+            self._config.get(CONF_ECL110_DISPLACE_MAX, DEFAULT_ECL110_DISPLACE_MAX)
+        )
+        self._ecl110_current_displace: float = 0.0
+        self._ecl110_last_payload: dict[str, Any] = {}
+        self._unsub_ecl110_state: Any = None
+
+        # Subscribe to ECL110 state topic if MQTT is available
+        hass.async_create_task(self._async_setup_ecl110_state_subscription())
+
     @property
     def mode(self) -> str:
         """Return current operation mode."""
@@ -202,6 +240,42 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
     @property
     def current_action(self) -> dict[str, Any]:
         return self._current_action
+    async def _async_setup_ecl110_state_subscription(self) -> None:
+        """Subscribe to ECL110 MQTT state updates if MQTT integration is available."""
+        if not self._ecl110_state_topic:
+            return
+        try:
+            self._unsub_ecl110_state = await mqtt.async_subscribe(
+                self.hass,
+                self._ecl110_state_topic,
+                self._async_handle_ecl110_state_message,
+                qos=self._ecl110_qos,
+            )
+            _LOGGER.debug("Subscribed to ECL110 state topic: %s", self._ecl110_state_topic)
+        except Exception as err:
+            _LOGGER.debug("ECL110 MQTT state subscription not available: %s", err)
+
+    @callback
+    def _async_handle_ecl110_state_message(self, msg: Any) -> None:
+        """Handle ECL110 MQTT state payload updates."""
+        payload = msg.payload
+        try:
+            if isinstance(payload, bytes):
+                payload = payload.decode("utf-8", errors="ignore")
+            data = json.loads(payload) if isinstance(payload, str) else payload
+            if isinstance(data, dict):
+                displace = data.get("displace")
+                if displace is None and isinstance(data.get("command"), dict):
+                    displace = data["command"].get("displace")
+                if displace is not None:
+                    self._ecl110_current_displace = float(displace)
+                    self._current_state.ecl110_displace_command = float(displace)
+                effective = data.get("effective_displace")
+                if effective is not None:
+                    self._current_state.ecl110_effective_displace = float(effective)
+        except Exception:
+            # Ignore malformed payloads
+            return
 
     @property
     def current_state(self) -> ThermalState:
@@ -248,6 +322,8 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     "mode": "comfort",
                     "price": self._get_current_price(),
                     "power_normalized": 0.7,
+                    "heat_pump_on": True,
+                    "displace_value": min(4.0, self._ecl110_displace_max),
                 }
             elif self._mode == MODE_BOOST:
                 self._current_action = {
@@ -256,6 +332,8 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     "mode": "boost",
                     "price": self._get_current_price(),
                     "power_normalized": 1.0,
+                    "heat_pump_on": True,
+                    "displace_value": self._ecl110_displace_max,
                 }
             elif self._mode == MODE_OFF:
                 self._current_action = {
@@ -264,6 +342,8 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     "mode": "off",
                     "price": self._get_current_price(),
                     "power_normalized": 0.0,
+                    "heat_pump_on": False,
+                    "displace_value": self._ecl110_displace_min,
                 }
 
             # Apply current action to heat pump
@@ -353,7 +433,12 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             self._thermal_params.heat_loss_coefficient = params[
                 "house_heat_loss_coefficient"
             ]
-        if "slab_thermal_mass" in params:
+        if "ecl110_displace_min" in params:
+            self._thermal_params.ecl110_displace_min = params["ecl110_displace_min"]
+            self._ecl110_displace_min = params["ecl110_displace_min"]
+        if "ecl110_displace_max" in params:
+            self._thermal_params.ecl110_displace_max = params["ecl110_displace_max"]
+            self._ecl110_displace_max = params["ecl110_displace_max"]
             self._thermal_params.slab_thermal_mass = params["slab_thermal_mass"]
         if "slab_heat_transfer" in params:
             self._thermal_params.slab_heat_transfer = params["slab_heat_transfer"]
@@ -387,6 +472,10 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             self._thermal_params.dhw_tank_volume = params["dhw_tank_volume"]
         if "dhw_setpoint" in params:
             self._thermal_params.dhw_setpoint = params["dhw_setpoint"]
+        if "ecl110_pid_time_constant_hours" in params:
+            self._thermal_params.ecl110_pid_time_constant_hours = params[
+                "ecl110_pid_time_constant_hours"
+            ]
         if "dhw_min_temperature" in params:
             self._thermal_params.dhw_min_temp = params["dhw_min_temperature"]
         if "dhw_daily_consumption" in params:
@@ -410,6 +499,9 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         if self._unsub_timer:
             self._unsub_timer()
             self._unsub_timer = None
+        if self._unsub_ecl110_state:
+            self._unsub_ecl110_state()
+            self._unsub_ecl110_state = None
 
     async def _update_current_state(self) -> None:
         """Update current thermal state from HA entities."""
@@ -477,6 +569,17 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                     self._current_state.dhw_temperature = self._dhw_temperature
                 except (ValueError, TypeError):
                     pass
+
+        # Update ECL110 effective displace state (PID/PI lag approximation)
+        if "displace_value" in self._current_action:
+            displace_cmd = float(self._current_action.get("displace_value", 0.0))
+            dt_h = self._opt_config.dt_hours
+            self._thermal_model.update_ecl110_displace_state(
+                self._current_state,
+                displace_cmd,
+                dt_h,
+            )
+            self._ecl110_current_displace = self._current_state.ecl110_displace_command
 
         # If no floor return sensor, estimate slab from room temp
         if not floor_return_entity:
@@ -744,50 +847,83 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
 
         return self._prices[0].get("total", 0) if self._prices else 0.0
 
+    async def async_publish_ecl110_command(
+        self,
+        displace_value: float,
+        heat_pump_on: bool,
+        reason: str = "optimizer",
+    ) -> None:
+        """Publish an ECL110 displace command via MQTT."""
+        displace = float(np.clip(displace_value, self._ecl110_displace_min, self._ecl110_displace_max))
+        payload = {
+            "source": DOMAIN,
+            "reason": reason,
+            "timestamp": dt_util.now().isoformat(),
+            "command": {
+                "type": "ecl110_control",
+                "heat_pump_on": bool(heat_pump_on),
+                "displace": round(displace, 1),
+            },
+            "context": {
+                "price": self._current_action.get("price"),
+                "mode": self._current_action.get("mode"),
+                "pre_heat_urgency": self._current_action.get("pre_heat_urgency"),
+            },
+        }
+
+        self._ecl110_last_payload = payload
+        self._ecl110_current_displace = displace
+
+        if not self._ecl110_command_topic:
+            return
+
+        try:
+            await self.hass.services.async_call(
+                "mqtt",
+                "publish",
+                {
+                    "topic": self._ecl110_command_topic,
+                    "payload": json.dumps(payload),
+                    "qos": int(self._ecl110_qos),
+                    "retain": bool(self._ecl110_retain),
+                },
+                blocking=True,
+            )
+        except Exception as err:
+            _LOGGER.error("Error publishing ECL110 MQTT command: %s", err)
+
+    async def async_publish_current_action(self, reason: str = "optimizer") -> None:
+        """Publish MQTT command for the currently selected optimizer action."""
+        if not self._current_action:
+            return
+        await self.async_publish_ecl110_command(
+            displace_value=float(self._current_action.get("displace_value", 0.0)),
+            heat_pump_on=bool(self._current_action.get("heat_pump_on", False)),
+            reason=reason,
+        )
+
     async def _apply_action(self) -> None:
-        """Apply the current optimization action to the heat pump."""
+        """Apply current action as (heat_pump_on, displace_value)."""
         if not self._current_action:
             return
 
-        climate_entity = self._config.get(CONF_HEAT_PUMP_ENTITY)
-        if climate_entity:
-            setpoint = self._current_action.get(
-                "setpoint", self._opt_config.target_temp
-            )
+        heat_pump_on = bool(self._current_action.get("heat_pump_on", False))
+
+        # 1) Toggle heat pump supply (ON/OFF)
+        switch_entity = self._config.get(CONF_HEAT_PUMP_SWITCH_ENTITY)
+        if switch_entity:
             try:
                 await self.hass.services.async_call(
-                    "climate",
-                    "set_temperature",
-                    {"entity_id": climate_entity, "temperature": setpoint},
+                    "switch",
+                    "turn_on" if heat_pump_on else "turn_off",
+                    {"entity_id": switch_entity},
                     blocking=True,
                 )
             except Exception as err:
-                _LOGGER.error("Error setting heat pump temperature: %s", err)
+                _LOGGER.error("Error toggling heat pump switch: %s", err)
 
-        switch_entity = self._config.get(CONF_HEAT_PUMP_SWITCH_ENTITY)
-        if switch_entity:
-            mode = self._current_action.get("mode", "normal")
-            if mode == "off":
-                try:
-                    await self.hass.services.async_call(
-                        "switch",
-                        "turn_off",
-                        {"entity_id": switch_entity},
-                        blocking=True,
-                    )
-                except Exception as err:
-                    _LOGGER.error("Error turning off heat pump: %s", err)
-            else:
-                try:
-                    await self.hass.services.async_call(
-                        "switch",
-                        "turn_on",
-                        {"entity_id": switch_entity},
-                        blocking=True,
-                    )
-                except Exception as err:
-                    _LOGGER.error("Error turning on heat pump: %s", err)
-
+        # 2) Publish ECL110 displace command
+        await self.async_publish_current_action(reason="scheduled_update")
     def _build_data_dict(self) -> dict[str, Any]:
         """Build the data dictionary for the coordinator."""
         result = self._optimization_result
@@ -819,6 +955,11 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             "next_optimization": self._next_optimization,
             "prices_available": len(self._prices),
             "weather_forecast_available": len(self._weather_forecast),
+            "ecl110_command_topic": self._ecl110_command_topic,
+            "ecl110_state_topic": self._ecl110_state_topic,
+            "ecl110_displace": self._current_action.get("displace_value", self._ecl110_current_displace),
+            "ecl110_effective_displace": self._current_state.ecl110_effective_displace,
+            "ecl110_last_payload": self._ecl110_last_payload,
         }
 
         if result:
@@ -859,8 +1000,18 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                             "upper_temp": ut,
                             "lower_temp": lt,
                             "solar_gain": sg,
+                            "displace": (
+                                result.displace_schedule[idx]
+                                if result.displace_schedule and idx < len(result.displace_schedule)
+                                else 0.0
+                            ),
+                            "heat_pump_on": (
+                                result.heat_pump_on_schedule[idx]
+                                if result.heat_pump_on_schedule and idx < len(result.heat_pump_on_schedule)
+                                else p > 0.1
+                            ),
                         }
-                        for ts, p, s, pr, rt, ut, lt, sg in zip(
+                        for idx, (ts, p, s, pr, rt, ut, lt, sg) in enumerate(zip(
                             result.timestamps[:24],
                             result.power_schedule[:24],
                             result.optimal_setpoints[:24],
@@ -881,7 +1032,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                                 if result.solar_gain_trajectory
                                 else [0.0] * 24
                             ),
-                        )
+                        ))
                     ],
                 }
             )

@@ -61,6 +61,10 @@ class OptimizationResult:
     status: str  # optimization status
     solve_time_ms: float = 0.0
 
+    # ECL110-oriented control outputs
+    displace_schedule: list[float] = field(default_factory=list)
+    heat_pump_on_schedule: list[bool] = field(default_factory=list)
+
     # Two-zone trajectories
     upper_temp_trajectory: list[float] = field(default_factory=list)
     lower_temp_trajectory: list[float] = field(default_factory=list)
@@ -588,6 +592,10 @@ class HeatPumpOptimizer:
         optimal_setpoints = self._power_to_setpoints(
             optimal_power, room_temps[:-1], outdoor_temps
         )
+        displace_schedule = self._power_to_displace_schedule(
+            optimal_power, outdoor_temps, forecast_analysis
+        )
+        heat_pump_schedule = self._power_to_heat_pump_schedule(optimal_power)
 
         upper_setpoints = []
         lower_setpoints = []
@@ -630,6 +638,8 @@ class HeatPumpOptimizer:
             optimal_setpoints=optimal_setpoints,
             status=status,
             solve_time_ms=t_elapsed,
+            displace_schedule=displace_schedule,
+            heat_pump_on_schedule=heat_pump_schedule,
             upper_temp_trajectory=upper_temps.tolist(),
             lower_temp_trajectory=lower_temps.tolist(),
             solar_gain_trajectory=solar_gains,
@@ -874,6 +884,10 @@ class HeatPumpOptimizer:
         optimal_setpoints = self._power_to_setpoints(
             optimal_space, room_temps[:-1], outdoor_temps
         )
+        displace_schedule = self._power_to_displace_schedule(
+            optimal_space, outdoor_temps, forecast_analysis
+        )
+        heat_pump_schedule = self._power_to_heat_pump_schedule(optimal_space)
 
         upper_setpoints = []
         lower_setpoints = []
@@ -914,6 +928,8 @@ class HeatPumpOptimizer:
             optimal_setpoints=optimal_setpoints,
             status=status,
             solve_time_ms=t_elapsed,
+            displace_schedule=displace_schedule,
+            heat_pump_on_schedule=heat_pump_schedule,
             upper_temp_trajectory=upper_temps.tolist(),
             lower_temp_trajectory=lower_temps.tolist(),
             solar_gain_trajectory=solar_gains,
@@ -973,13 +989,13 @@ class HeatPumpOptimizer:
         outdoor_temps: np.ndarray,
     ) -> list[float]:
         """Convert power schedule to equivalent temperature setpoints."""
-        setpoints = []
+        setpoints: list[float] = []
         p_range = (
             self.model.params.max_electrical_power
             - self.model.params.min_electrical_power
         )
 
-        for i, (power, room_t) in enumerate(zip(power_schedule, room_temps)):
+        for power, _room_t in zip(power_schedule, room_temps):
             p_norm = (
                 power - self.model.params.min_electrical_power
             ) / max(p_range, 0.1)
@@ -990,6 +1006,62 @@ class HeatPumpOptimizer:
 
         return setpoints
 
+    def _power_to_displace_schedule(
+        self,
+        power_schedule: np.ndarray,
+        outdoor_temps: np.ndarray,
+        forecast_analysis: dict[str, Any] | None = None,
+    ) -> list[float]:
+        """Map optimized power to ECL110 displace values with PID-aware smoothing."""
+        p = self.model.params
+        p_min = p.min_electrical_power
+        p_max = p.max_electrical_power
+        d_min = p.ecl110_displace_min
+        d_max = p.ecl110_displace_max
+
+        solar_reduction = (forecast_analysis or {}).get("solar_reduction_factor", 1.0)
+        wind_factor = (forecast_analysis or {}).get("wind_anticipation_factor", 1.0)
+        rain_factor = (forecast_analysis or {}).get("rain_anticipation_factor", 1.0)
+
+        displacement_bias = (
+            (wind_factor - 1.0) * 3.0
+            + (rain_factor - 1.0) * 4.0
+            - (1.0 - solar_reduction) * 5.0
+        )
+
+        raw_displace: list[float] = []
+        for i, power in enumerate(power_schedule):
+            p_norm = (power - p_min) / max(p_max - p_min, 0.1)
+            p_norm = float(np.clip(p_norm, 0.0, 1.0))
+            displace = d_min + p_norm * (d_max - d_min)
+
+            if i < int(max(1, 8 / self.config.dt_hours)):
+                displace += displacement_bias
+
+            out_t = outdoor_temps[i] if i < len(outdoor_temps) else outdoor_temps[-1]
+            if out_t < 0:
+                displace += min(2.0, abs(out_t) * 0.08)
+
+            raw_displace.append(float(np.clip(displace, d_min, d_max)))
+
+        tau = max(0.1, p.ecl110_pid_time_constant_hours)
+        alpha = float(np.clip(self.config.dt_hours / tau, 0.0, 1.0))
+        effective = 0.0
+        filtered: list[float] = []
+        for cmd in raw_displace:
+            effective = effective + alpha * (cmd - effective)
+            filtered.append(round(float(np.clip(effective, d_min, d_max)), 1))
+
+        return filtered
+
+    def _power_to_heat_pump_schedule(
+        self,
+        power_schedule: np.ndarray,
+    ) -> list[bool]:
+        """Convert optimized power to ON/OFF decisions for supply enable."""
+        p = self.model.params
+        on_threshold = max(0.1, p.min_electrical_power * 0.5)
+        return [bool(power >= on_threshold) for power in power_schedule]
     def get_current_action(
         self, result: OptimizationResult, current_time: datetime
     ) -> dict[str, Any]:
@@ -1000,6 +1072,8 @@ class HeatPumpOptimizer:
                 "setpoint": self.config.target_temp,
                 "mode": "idle",
                 "price": 0.0,
+                "heat_pump_on": False,
+                "displace_value": 0.0,
             }
 
         # Find the current time step
@@ -1014,6 +1088,16 @@ class HeatPumpOptimizer:
         power = result.power_schedule[i]
         setpoint = result.optimal_setpoints[i]
         price = result.prices[i]
+        displace_value = (
+            result.displace_schedule[i]
+            if result.displace_schedule and i < len(result.displace_schedule)
+            else 0.0
+        )
+        heat_pump_on = (
+            result.heat_pump_on_schedule[i]
+            if result.heat_pump_on_schedule and i < len(result.heat_pump_on_schedule)
+            else power > max(0.1, self.model.params.min_electrical_power * 0.5)
+        )
 
         p_range = (
             self.model.params.max_electrical_power
@@ -1040,6 +1124,8 @@ class HeatPumpOptimizer:
             "mode": mode,
             "price": round(price, 4),
             "power_normalized": round(p_norm, 2),
+            "heat_pump_on": bool(heat_pump_on),
+            "displace_value": round(float(displace_value), 1),
         }
 
         # Add zone-specific setpoints if available
