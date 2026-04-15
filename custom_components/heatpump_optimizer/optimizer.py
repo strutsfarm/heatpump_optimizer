@@ -1125,7 +1125,7 @@ class HeatPumpOptimizer:
             "price": round(price, 4),
             "power_normalized": round(p_norm, 2),
             "heat_pump_on": bool(heat_pump_on),
-            "displace_value": round(float(displace_value), 1),
+            "displace_value": float(displace_value),
         }
 
         # Add zone-specific setpoints if available

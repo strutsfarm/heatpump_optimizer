@@ -347,7 +347,7 @@ MIT
 This integration can now drive an ECL110-compatible controller using two explicit outputs from MPC:
 
 - `heat_pump_on` (boolean): whether supply should be enabled
-- `displace_value` (°C): parallel shift command for ECL110 heat curve
+- `displace_value` (°C): parallel shift command for ECL110 heat curve (published as integer to ECL110)
 
 ### MQTT command payload
 
@@ -361,7 +361,7 @@ The coordinator publishes a JSON payload (via Home Assistant `mqtt.publish`) to 
   "command": {
     "type": "ecl110_control",
     "heat_pump_on": true,
-    "displace": 3.5
+    "displace": 4
   },
   "context": {
     "price": 1.23,
@@ -382,4 +382,4 @@ The coordinator publishes a JSON payload (via Home Assistant `mqtt.publish`) to 
 
 ### PI/PID dynamics handling
 
-ECL110 PI/PID response is approximated as a first-order lag, so displace commands are smoothed before dispatch and an `effective_displace` state is tracked for observability.
+ECL110 PI/PID response is approximated as a first-order lag, so internal displace commands are smoothed before dispatch, then rounded to integer values for MQTT output, and an `effective_displace` state is tracked for observability.

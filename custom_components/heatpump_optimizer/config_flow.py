@@ -141,7 +141,7 @@ async def validate_tibber_token(token: str) -> bool:
 class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Heat Pump Optimizer."""
 
-    VERSION = 4  # bumped for ECL110 displace control schema
+    VERSION = 5  # bumped for ECL110 integer-displace output schema
 
     def __init__(self) -> None:
         """Initialize the config flow."""

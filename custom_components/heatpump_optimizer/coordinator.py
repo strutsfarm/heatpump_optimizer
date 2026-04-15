@@ -853,8 +853,11 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         heat_pump_on: bool,
         reason: str = "optimizer",
     ) -> None:
-        """Publish an ECL110 displace command via MQTT."""
-        displace = float(np.clip(displace_value, self._ecl110_displace_min, self._ecl110_displace_max))
+        """Publish an ECL110 displace command via MQTT using integer displace values."""
+        displace = float(
+            np.clip(displace_value, self._ecl110_displace_min, self._ecl110_displace_max)
+        )
+        displace_int = int(round(displace))
         payload = {
             "source": DOMAIN,
             "reason": reason,
@@ -862,7 +865,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             "command": {
                 "type": "ecl110_control",
                 "heat_pump_on": bool(heat_pump_on),
-                "displace": round(displace, 1),
+                "displace": displace_int,
             },
             "context": {
                 "price": self._current_action.get("price"),
@@ -872,7 +875,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         }
 
         self._ecl110_last_payload = payload
-        self._ecl110_current_displace = displace
+        self._ecl110_current_displace = float(displace_int)
 
         if not self._ecl110_command_topic:
             return

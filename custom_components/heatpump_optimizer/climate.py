@@ -237,7 +237,7 @@ class HeatPumpOptimizerClimate(CoordinatorEntity, ClimateEntity):
         return attrs
 
     async def _async_publish_displace_from_current_action(self, reason: str) -> None:
-        """Publish current displace command over MQTT through the coordinator."""
+        """Publish current displace command over MQTT through the coordinator (integer output)."""
         try:
             await self.coordinator.async_publish_current_action(reason=reason)
         except Exception as err:
