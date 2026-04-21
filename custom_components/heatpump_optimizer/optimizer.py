@@ -887,7 +887,10 @@ class HeatPumpOptimizer:
         displace_schedule = self._power_to_displace_schedule(
             optimal_space, outdoor_temps, forecast_analysis
         )
-        heat_pump_schedule = self._power_to_heat_pump_schedule(optimal_space)
+        heat_pump_schedule = self._power_to_heat_pump_schedule(
+            optimal_space,
+            optimal_dhw,
+        )
 
         upper_setpoints = []
         lower_setpoints = []
@@ -1056,12 +1059,79 @@ class HeatPumpOptimizer:
 
     def _power_to_heat_pump_schedule(
         self,
-        power_schedule: np.ndarray,
+        space_power_schedule: np.ndarray,
+        dhw_power_schedule: np.ndarray | None = None,
     ) -> list[bool]:
-        """Convert optimized power to ON/OFF decisions for supply enable."""
+        """Convert optimized power to ON/OFF decisions for supply enable.
+
+        Heat pump is considered ON when either space heating power OR DHW power
+        is above the activation threshold.
+        """
         p = self.model.params
         on_threshold = max(0.1, p.min_electrical_power * 0.5)
-        return [bool(power >= on_threshold) for power in power_schedule]
+
+        if dhw_power_schedule is None:
+            dhw_power_schedule = np.zeros_like(space_power_schedule)
+
+        schedule: list[bool] = []
+        for i, (space_power, dhw_power) in enumerate(
+            zip(space_power_schedule, dhw_power_schedule)
+        ):
+            space_on = bool(space_power >= on_threshold)
+            dhw_on = bool(dhw_power >= on_threshold)
+            heat_pump_on = space_on or dhw_on
+
+            reason = "off"
+            if space_on and dhw_on:
+                reason = "space_and_dhw"
+            elif space_on:
+                reason = "space_only"
+            elif dhw_on:
+                reason = "dhw_only"
+
+            _LOGGER.debug(
+                (
+                    "Heat pump decision step=%d: optimal_space=%.3f kW, "
+                    "optimal_dhw=%.3f kW, threshold=%.3f kW -> "
+                    "heat_pump_on=%s (%s)"
+                ),
+                i,
+                float(space_power),
+                float(dhw_power),
+                float(on_threshold),
+                heat_pump_on,
+                reason,
+            )
+            schedule.append(heat_pump_on)
+
+        if len(space_power_schedule) > 0:
+            first_space = float(space_power_schedule[0])
+            first_dhw = float(dhw_power_schedule[0])
+            first_space_on = first_space >= on_threshold
+            first_dhw_on = first_dhw >= on_threshold
+            first_on = first_space_on or first_dhw_on
+
+            first_reason = "off"
+            if first_space_on and first_dhw_on:
+                first_reason = "space_and_dhw"
+            elif first_space_on:
+                first_reason = "space_only"
+            elif first_dhw_on:
+                first_reason = "dhw_only"
+
+            _LOGGER.debug(
+                (
+                    "Heat pump first-step summary: optimal_space[0]=%.3f kW, "
+                    "optimal_dhw[0]=%.3f kW -> heat_pump_on=%s (%s)"
+                ),
+                first_space,
+                first_dhw,
+                first_on,
+                first_reason,
+            )
+
+        return schedule
+
     def get_current_action(
         self, result: OptimizationResult, current_time: datetime
     ) -> dict[str, Any]:
