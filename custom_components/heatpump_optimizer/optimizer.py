@@ -377,7 +377,8 @@ class HeatPumpOptimizer:
                 forecast_analysis, t_start,
             )
 
-        result.predictive_info = forecast_analysis
+        existing_info = result.predictive_info if result.predictive_info else {}
+        result.predictive_info = {**forecast_analysis, **existing_info}
         return result
 
     def _optimize_space_only(
@@ -697,6 +698,44 @@ class HeatPumpOptimizer:
                 if future_loss > 1.1:
                     anticipatory_weights[i] *= min(1.5, future_loss)
 
+        # Learned usage-based DHW demand prediction (0-24h trajectory)
+        usage_intensity = np.array([
+            self.model.dhw_usage_intensity(h) for h in step_hours
+        ])
+        usage_peak_threshold = max(1.1, float(np.percentile(usage_intensity, 70)))
+        high_usage_mask = usage_intensity >= usage_peak_threshold
+
+        # Estimate required lead time to heat from minimum to setpoint.
+        c_dhw = max(self.model.params.dhw_tank_thermal_mass, 0.05)
+        cop_dhw_est = max(
+            1.0,
+            self.model.compute_cop_dhw(float(np.mean(outdoor_temps)), dhw_setpoint),
+        )
+        max_dhw_thermal_power = max(0.1, cop_dhw_est * (p_max * 0.7))
+        heating_rate_c_per_hour = max_dhw_thermal_power / c_dhw
+        lead_hours = float(np.clip((dhw_setpoint - dhw_min_temp) / max(heating_rate_c_per_hour, 0.2), 0.5, 4.0))
+        lead_steps = max(1, int(np.ceil(lead_hours / dt)))
+
+        # Dynamic DHW comfort trajectory: stay near minimum except before predicted use.
+        dhw_target_temps = np.full(n_steps, dhw_min_temp)
+        dhw_target_weights = np.full(n_steps, 0.08)
+        for idx in np.where(high_usage_mask)[0]:
+            window_start = max(0, idx - lead_steps)
+            window_len = max(1, idx - window_start + 1)
+            ramp = np.linspace(dhw_min_temp + 0.3, dhw_setpoint, window_len)
+            dhw_target_temps[window_start:idx + 1] = np.maximum(
+                dhw_target_temps[window_start:idx + 1],
+                ramp,
+            )
+            dhw_target_weights[window_start:idx + 1] = np.maximum(
+                dhw_target_weights[window_start:idx + 1],
+                np.linspace(0.4, 1.2, window_len),
+            )
+            dhw_target_weights[idx] = max(dhw_target_weights[idx], 2.0)
+
+        cheap_price_threshold = float(np.percentile(prices, 35))
+        expensive_price_threshold = float(np.percentile(prices, 70))
+
         def objective(x: np.ndarray) -> float:
             """Joint space + DHW optimization objective."""
             space_power = x[:n_steps]
@@ -756,21 +795,29 @@ class HeatPumpOptimizer:
                 )
 
             # --- DHW temperature penalty ---
-            # Hard-ish constraint: DHW must stay above minimum
+            # Hard safety limit at configured minimum temperature.
             dhw_t = dhw_temps[1:]
             dhw_undershoot = np.maximum(0, dhw_min_temp - dhw_t)
-            # Very high penalty for DHW below minimum (safety/comfort)
-            dhw_penalty = 15.0 * self.config.comfort_weight * np.sum(
+            dhw_penalty = 25.0 * self.config.comfort_weight * np.sum(
                 dhw_undershoot ** 2
             )
 
-            # Soft penalty for DHW below setpoint (preference, not hard constraint)
-            dhw_below_setpoint = np.maximum(0, dhw_setpoint - dhw_t)
-            dhw_comfort = 0.5 * np.sum(dhw_below_setpoint ** 2)
+            # Predictive comfort: only require high temp before predicted usage.
+            dhw_target_gap = np.maximum(0, dhw_target_temps - dhw_t)
+            dhw_comfort = np.sum(dhw_target_weights * (dhw_target_gap ** 2))
 
-            # Prefer DHW heating during cheap periods
-            # (already handled by energy cost, but add slight preference)
-            dhw_cheap_bonus = 0.0
+            # Cost-priority: penalize expensive DHW heating unless demand window is near.
+            expensive_mask = prices >= expensive_price_threshold
+            no_near_demand_mask = dhw_target_weights < 0.6
+            dhw_expensive_penalty = 0.04 * np.sum(
+                dhw_power * expensive_mask * no_near_demand_mask * dt
+            )
+
+            # Prefer pre-heating in cheap periods when demand is coming.
+            upcoming_demand_mask = dhw_target_weights >= 0.6
+            dhw_cheap_bonus = -0.03 * np.sum(
+                dhw_power * (prices <= cheap_price_threshold) * upcoming_demand_mask * dt
+            )
 
             # --- Capacity constraint penalty ---
             # Total power must not exceed max capacity
@@ -799,7 +846,7 @@ class HeatPumpOptimizer:
 
             return (
                 energy_cost + space_penalty + comfort_cost
-                + dhw_penalty + dhw_comfort + dhw_cheap_bonus
+                + dhw_penalty + dhw_comfort + dhw_cheap_bonus + dhw_expensive_penalty
                 + capacity_penalty + smoothness + solar_anticipation_cost
             )
 
@@ -812,15 +859,20 @@ class HeatPumpOptimizer:
             init_space[i] *= anticipatory_weights[i]
         init_space = np.clip(init_space, p_min * 0.5, p_max * 0.8)
 
-        # DHW: heat during cheap periods, less during expensive
+        # DHW initial plan: keep near minimum, pre-heat before predicted usage,
+        # and prioritize the cheapest hours in those windows.
         init_dhw = np.zeros(n_steps)
-        # If DHW is below setpoint, prioritize heating during cheap periods
-        if initial_state.dhw_temperature < dhw_setpoint:
-            # Find cheapest 25% of periods and allocate DHW power there
-            price_threshold = np.percentile(prices, 25)
-            cheap_mask = prices <= price_threshold
-            init_dhw[cheap_mask] = p_max * 0.3
-        init_dhw = np.clip(init_dhw, 0.0, p_max * 0.5)
+        preheat_mask = dhw_target_weights >= 0.6
+        if np.any(preheat_mask):
+            cheap_preheat_mask = preheat_mask & (prices <= cheap_price_threshold)
+            init_dhw[cheap_preheat_mask] = p_max * 0.35
+            init_dhw[preheat_mask & ~cheap_preheat_mask] = p_max * 0.18
+
+        if initial_state.dhw_temperature <= dhw_min_temp + 0.4:
+            immediate_slots = min(max(1, int(np.ceil(1.0 / dt))), n_steps)
+            init_dhw[:immediate_slots] = np.maximum(init_dhw[:immediate_slots], p_max * 0.4)
+
+        init_dhw = np.clip(init_dhw, 0.0, p_max * 0.6)
 
         x0 = np.concatenate([init_space, init_dhw])
 
@@ -941,6 +993,16 @@ class HeatPumpOptimizer:
             dhw_power_schedule=optimal_dhw.tolist(),
             dhw_temp_trajectory=dhw_temps.tolist(),
             dhw_heating_cost=dhw_cost,
+            predictive_info={
+                "dhw_peak_usage_hours": [
+                    int(step_hours[idx]) % 24
+                    for idx in np.where(high_usage_mask)[0][:24].tolist()
+                ],
+                "dhw_preheat_lead_hours": round(lead_hours, 2),
+                "dhw_min_temperature": float(dhw_min_temp),
+                "dhw_target_temperature": float(dhw_setpoint),
+                "dhw_usage_intensity_now": float(usage_intensity[0]) if len(usage_intensity) else 1.0,
+            },
         )
 
     def _compute_baseline_power(
@@ -1215,6 +1277,10 @@ class HeatPumpOptimizer:
             action["dhw_heating_active"] = dhw_power > 0.1
         if result.dhw_temp_trajectory and i < len(result.dhw_temp_trajectory):
             action["dhw_temperature"] = round(result.dhw_temp_trajectory[i], 1)
+        if result.predictive_info.get("dhw_target_temperature") is not None:
+            action["dhw_target_temperature"] = result.predictive_info.get(
+                "dhw_target_temperature"
+            )
 
         # Add predictive info
         if result.predictive_info:

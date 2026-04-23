@@ -24,6 +24,7 @@ from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -97,6 +98,11 @@ from .optimizer import HeatPumpOptimizer, OptimizationConfig, OptimizationResult
 _LOGGER = logging.getLogger(__name__)
 
 TIBBER_API_URL = "https://api.tibber.com/v1-beta/gql"
+
+DHW_PROFILE_STORE_VERSION = 1
+DHW_PROFILE_EWMA_ALPHA = 0.12
+DHW_PROFILE_MIN_INTENSITY = 0.2
+DHW_PROFILE_MAX_INTENSITY = 3.5
 
 # Tibber GraphQL query for price data
 TIBBER_PRICE_QUERY = """
@@ -196,6 +202,16 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
 
         # DHW state
         self._dhw_temperature: float | None = None
+        self._last_dhw_temp_sample: float | None = None
+        self._last_dhw_sample_time: datetime | None = None
+        self._dhw_hourly_profile: list[float] = (
+            self._thermal_params.dhw_hourly_draw_pattern.copy()
+        )
+        self._dhw_profile_store: Store = Store(
+            hass,
+            DHW_PROFILE_STORE_VERSION,
+            f"{DOMAIN}_{entry.entry_id}_dhw_profile",
+        )
 
         # ECL110 MQTT state
         self._ecl110_command_topic: str = self._config.get(
@@ -218,6 +234,9 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
 
         # Subscribe to ECL110 state topic if MQTT is available
         hass.async_create_task(self._async_setup_ecl110_state_subscription())
+
+        # Load learned DHW usage profile (persisted across restarts)
+        hass.async_create_task(self._async_load_dhw_profile())
 
     @property
     def mode(self) -> str:
@@ -299,6 +318,96 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
     def dhw_temperature(self) -> float | None:
         """Current DHW temperature."""
         return self._dhw_temperature
+
+    def _normalize_dhw_profile(self, profile: list[float]) -> list[float]:
+        """Normalize and clamp DHW hourly profile (average ~= 1.0)."""
+        if len(profile) != 24:
+            profile = self._thermal_params.dhw_hourly_draw_pattern.copy()
+
+        cleaned = [
+            float(np.clip(v, DHW_PROFILE_MIN_INTENSITY, DHW_PROFILE_MAX_INTENSITY))
+            for v in profile
+        ]
+        avg = float(np.mean(cleaned)) if cleaned else 1.0
+        if avg <= 0:
+            return self._thermal_params.dhw_hourly_draw_pattern.copy()
+
+        normalized = [float(np.clip(v / avg, DHW_PROFILE_MIN_INTENSITY, DHW_PROFILE_MAX_INTENSITY)) for v in cleaned]
+        return normalized
+
+    async def _async_load_dhw_profile(self) -> None:
+        """Load persisted DHW usage profile and apply it to the thermal model."""
+        try:
+            stored = await self._dhw_profile_store.async_load()
+            if not stored:
+                return
+
+            profile = stored.get("hourly_profile")
+            if not isinstance(profile, list) or len(profile) != 24:
+                return
+
+            self._dhw_hourly_profile = self._normalize_dhw_profile(profile)
+            self._thermal_params.dhw_hourly_draw_pattern = self._dhw_hourly_profile.copy()
+            _LOGGER.info("Loaded learned DHW usage profile from storage")
+        except Exception as err:
+            _LOGGER.debug("Could not load learned DHW profile: %s", err)
+
+    async def _async_save_dhw_profile(self) -> None:
+        """Persist learned DHW profile to Home Assistant storage."""
+        try:
+            await self._dhw_profile_store.async_save(
+                {
+                    "hourly_profile": self._dhw_hourly_profile,
+                    "updated_at": dt_util.now().isoformat(),
+                }
+            )
+        except Exception as err:
+            _LOGGER.debug("Could not persist DHW profile: %s", err)
+
+    async def _async_learn_dhw_usage(self, dhw_temp: float) -> None:
+        """Learn hourly DHW usage profile from observed temperature drops."""
+        now = dt_util.now()
+
+        if self._last_dhw_temp_sample is None or self._last_dhw_sample_time is None:
+            self._last_dhw_temp_sample = dhw_temp
+            self._last_dhw_sample_time = now
+            return
+
+        dt_h = (now - self._last_dhw_sample_time).total_seconds() / 3600.0
+        if dt_h <= 0.02 or dt_h > 6.0:
+            self._last_dhw_temp_sample = dhw_temp
+            self._last_dhw_sample_time = now
+            return
+
+        temp_drop = self._last_dhw_temp_sample - dhw_temp
+        self._last_dhw_temp_sample = dhw_temp
+        self._last_dhw_sample_time = now
+
+        # Learn only on meaningful drops while DHW is not actively heated.
+        if temp_drop < 0.15:
+            return
+        if bool(self._current_action.get("dhw_heating_active", False)):
+            return
+
+        draw_intensity = temp_drop / dt_h
+        hour = now.hour
+
+        profile = self._dhw_hourly_profile.copy()
+        profile[hour] = (
+            (1.0 - DHW_PROFILE_EWMA_ALPHA) * profile[hour]
+            + DHW_PROFILE_EWMA_ALPHA * draw_intensity
+        )
+        self._dhw_hourly_profile = self._normalize_dhw_profile(profile)
+        self._thermal_params.dhw_hourly_draw_pattern = self._dhw_hourly_profile.copy()
+
+        _LOGGER.debug(
+            "Learned DHW usage hour=%d drop=%.2f°C dt=%.2fh intensity=%.2f",
+            hour,
+            temp_drop,
+            dt_h,
+            draw_intensity,
+        )
+        await self._async_save_dhw_profile()
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data and run optimization."""
@@ -567,6 +676,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
                 try:
                     self._dhw_temperature = float(state.state)
                     self._current_state.dhw_temperature = self._dhw_temperature
+                    await self._async_learn_dhw_usage(self._dhw_temperature)
                 except (ValueError, TypeError):
                     pass
 
@@ -954,6 +1064,7 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             "dhw_temperature": self._dhw_temperature or self._current_state.dhw_temperature,
             "dhw_setpoint": self._thermal_params.dhw_setpoint,
             "dhw_min_temperature": self._thermal_params.dhw_min_temp,
+            "dhw_usage_profile": self._dhw_hourly_profile,
             "last_optimization": self._last_optimization,
             "next_optimization": self._next_optimization,
             "prices_available": len(self._prices),

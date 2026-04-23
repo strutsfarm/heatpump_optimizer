@@ -1,5 +1,19 @@
 # Heat Pump Cost Optimizer — Release Notes
 
+## v2.1.0
+**Release date:** 2026-04-23
+
+### Summary
+This release improves Domestic Hot Water (DHW) optimization to prioritize cost savings while maintaining safe hot water availability.
+
+### Highlights
+- **Configured DHW minimum temperature is now actively enforced as the true floor** in optimization logic.
+- **Predictive DHW pre-heating** now uses forecasted usage windows and estimated lead-time so the tank can coast near minimum between peaks.
+- **Price-aware DHW control** reduces heating in expensive periods when no near-term hot water usage is predicted.
+- **Learning usage patterns over time** from observed DHW temperature drops, persisted across restarts.
+- **Post-install editability improvements** in the options flow for comfort/day-night schedule and DHW parameters.
+- **Branding update**: added integration icon (`icon.png`) for HACS/repository branding.
+
 ## v2.0.1
 **Release date:** 2026-04-21
 

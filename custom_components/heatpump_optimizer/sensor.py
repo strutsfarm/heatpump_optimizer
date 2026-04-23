@@ -713,6 +713,11 @@ class PredictiveInsightSensor(HeatPumpOptimizerSensorBase):
                 "future_solar_6_12h_kwh": info.get("future_solar_6_12h_kwh"),
                 "avg_future_wind_ms": info.get("avg_future_wind_ms"),
                 "avg_future_precip_mmh": info.get("avg_future_precip_mmh"),
+                "dhw_preheat_lead_hours": info.get("dhw_preheat_lead_hours"),
+                "dhw_peak_usage_hours": info.get("dhw_peak_usage_hours"),
+                "dhw_min_temperature": info.get("dhw_min_temperature"),
+                "dhw_target_temperature": info.get("dhw_target_temperature"),
+                "dhw_usage_profile": self.coordinator.data.get("dhw_usage_profile", []),
             }
         return {}
 

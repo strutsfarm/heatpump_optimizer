@@ -136,6 +136,11 @@ class ThermalParameters:
     # Whether DHW optimization is enabled
     dhw_enabled: bool = False
 
+    # Learned/adjustable DHW usage profile (hourly multipliers, avg ~= 1.0)
+    dhw_hourly_draw_pattern: list[float] = field(
+        default_factory=lambda: DHW_HOURLY_DRAW_PATTERN.copy()
+    )
+
     @property
     def buffer_tank_thermal_mass(self) -> float:
         """Thermal mass of buffer tank in kWh/°C."""
@@ -498,8 +503,12 @@ class ThermalModel:
         Uses a time-of-day pattern multiplied by average draw power.
         """
         hour_idx = int(hour_of_day) % 24
-        pattern_multiplier = DHW_HOURLY_DRAW_PATTERN[hour_idx]
+        pattern_multiplier = self.params.dhw_hourly_draw_pattern[hour_idx]
         return self.params.dhw_draw_power * pattern_multiplier
+
+    def dhw_usage_intensity(self, hour_of_day: float) -> float:
+        """Return normalized DHW usage intensity for a given hour (avg ~= 1.0)."""
+        return self.params.dhw_hourly_draw_pattern[int(hour_of_day) % 24]
 
     def simulate_dhw_step(
         self,

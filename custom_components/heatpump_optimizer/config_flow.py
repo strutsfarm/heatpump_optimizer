@@ -714,6 +714,48 @@ class HeatPumpOptimizerOptionsFlow(config_entries.OptionsFlow):
                         )
                     ),
                     vol.Required(
+                        CONF_COMFORT_TEMP_DAY,
+                        default=current.get(
+                            CONF_COMFORT_TEMP_DAY, DEFAULT_COMFORT_TEMP_DAY
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=16, max=26, step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_COMFORT_TEMP_NIGHT,
+                        default=current.get(
+                            CONF_COMFORT_TEMP_NIGHT, DEFAULT_COMFORT_TEMP_NIGHT
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=15, max=24, step=0.5,
+                            unit_of_measurement="°C",
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_DAY_START_HOUR,
+                        default=current.get(CONF_DAY_START_HOUR, DEFAULT_DAY_START_HOUR),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0, max=12, step=1,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
+                        CONF_DAY_END_HOUR,
+                        default=current.get(CONF_DAY_END_HOUR, DEFAULT_DAY_END_HOUR),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=18, max=23, step=1,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
+                    vol.Required(
                         CONF_PRICE_WEIGHT,
                         default=current.get(CONF_PRICE_WEIGHT, DEFAULT_PRICE_WEIGHT),
                     ): selector.NumberSelector(
@@ -779,6 +821,28 @@ class HeatPumpOptimizerOptionsFlow(config_entries.OptionsFlow):
                         )
                     ),
                     # DHW options editable at runtime
+                    vol.Optional(
+                        CONF_DHW_TANK_VOLUME,
+                        default=current.get(CONF_DHW_TANK_VOLUME, DEFAULT_DHW_TANK_VOLUME),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=50, max=500, step=10,
+                            unit_of_measurement="L",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_DHW_DAILY_CONSUMPTION,
+                        default=current.get(
+                            CONF_DHW_DAILY_CONSUMPTION, DEFAULT_DHW_DAILY_CONSUMPTION
+                        ),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=50, max=500, step=10,
+                            unit_of_measurement="L/day",
+                            mode=selector.NumberSelectorMode.BOX,
+                        )
+                    ),
                     vol.Optional(
                         CONF_DHW_SETPOINT,
                         default=current.get(CONF_DHW_SETPOINT, DEFAULT_DHW_SETPOINT),
