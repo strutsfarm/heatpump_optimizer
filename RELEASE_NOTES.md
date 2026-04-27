@@ -1,5 +1,43 @@
 # Heat Pump Cost Optimizer — Release Notes
 
+## v2.2.0
+**Release date:** 2026-04-27
+
+### Summary
+This minor release introduces a new, preferred ECL110 MQTT direct-write control path while keeping full backward compatibility with existing legacy JSON command workflows.
+
+### Highlights
+- **New ECL110 direct-write MQTT interface (preferred):**
+  - Commands are now published as plain numeric payloads to a dedicated `/set` topic for cleaner, lower-overhead control.
+  - Default direct-write topic: `ecl110/flow_temp_control/displace/set`.
+- **Backward compatibility preserved:**
+  - Legacy JSON command publishing remains supported on `ecl110/command`.
+  - Existing ECL110 installations using the previous JSON interface continue to work without mandatory migration.
+- **Broader state payload compatibility:**
+  - State handling now supports both legacy JSON/dictionary payloads and scalar numeric payloads from hierarchical topic structures.
+- **Improved configuration UX:**
+  - Added a new configurable option: `ecl110_displace_set_topic`.
+  - Existing `ecl110_command_topic` labeling has been clarified as the **legacy JSON path**.
+  - Updated UI strings/translations for clearer topic purpose in both setup and options flows.
+
+### Configuration options
+The following MQTT topic settings are now available for ECL110 control:
+- `ecl110_displace_set_topic` *(new, preferred direct-write path)*
+  - Default: `ecl110/flow_temp_control/displace/set`
+- `ecl110_command_topic` *(legacy JSON path, optional for compatibility)*
+  - Default: `ecl110/command`
+- `ecl110_state_topic` *(state feedback topic)*
+  - Default: `ecl110/flow_temp_control/displace`
+
+### User impact
+- Recommended for users integrating with ECL110 hierarchical MQTT topics and direct numeric control.
+- Existing users can safely upgrade without immediate topic migration.
+- Integrators can run both paths in parallel during transition if needed.
+
+### Notes
+- This is a backward-compatible minor release.
+- No required database/config migration for existing installations.
+
 ## v2.1.0
 **Release date:** 2026-04-23
 
