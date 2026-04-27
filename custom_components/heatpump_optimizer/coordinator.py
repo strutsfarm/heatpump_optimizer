@@ -39,6 +39,7 @@ from .const import (
     CONF_FLOOR_RETURN_TEMP_ENTITY,
     CONF_DHW_TEMP_ENTITY,
     CONF_ECL110_COMMAND_TOPIC,
+    CONF_ECL110_DISPLACE_SET_TOPIC,
     CONF_ECL110_STATE_TOPIC,
     CONF_ECL110_QOS,
     CONF_ECL110_RETAIN,
@@ -79,6 +80,7 @@ from .const import (
     DEFAULT_DHW_SETPOINT,
     DEFAULT_DHW_MIN_TEMP,
     DEFAULT_ECL110_COMMAND_TOPIC,
+    DEFAULT_ECL110_DISPLACE_SET_TOPIC,
     DEFAULT_ECL110_STATE_TOPIC,
     DEFAULT_ECL110_QOS,
     DEFAULT_ECL110_RETAIN,
@@ -217,6 +219,9 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         self._ecl110_command_topic: str = self._config.get(
             CONF_ECL110_COMMAND_TOPIC, DEFAULT_ECL110_COMMAND_TOPIC
         )
+        self._ecl110_displace_set_topic: str = self._config.get(
+            CONF_ECL110_DISPLACE_SET_TOPIC, DEFAULT_ECL110_DISPLACE_SET_TOPIC
+        )
         self._ecl110_state_topic: str = self._config.get(
             CONF_ECL110_STATE_TOPIC, DEFAULT_ECL110_STATE_TOPIC
         )
@@ -282,16 +287,26 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             if isinstance(payload, bytes):
                 payload = payload.decode("utf-8", errors="ignore")
             data = json.loads(payload) if isinstance(payload, str) else payload
+
+            displace: float | None = None
             if isinstance(data, dict):
-                displace = data.get("displace")
-                if displace is None and isinstance(data.get("command"), dict):
-                    displace = data["command"].get("displace")
-                if displace is not None:
-                    self._ecl110_current_displace = float(displace)
-                    self._current_state.ecl110_displace_command = float(displace)
+                # Legacy state payload shape
+                displace_raw = data.get("displace")
+                if displace_raw is None and isinstance(data.get("command"), dict):
+                    displace_raw = data["command"].get("displace")
+                if displace_raw is not None:
+                    displace = float(displace_raw)
+
                 effective = data.get("effective_displace")
                 if effective is not None:
                     self._current_state.ecl110_effective_displace = float(effective)
+            elif isinstance(data, (int, float)):
+                # New direct topic payload shape: scalar JSON value
+                displace = float(data)
+
+            if displace is not None:
+                self._ecl110_current_displace = displace
+                self._current_state.ecl110_displace_command = displace
         except Exception:
             # Ignore malformed payloads
             return
@@ -963,12 +978,13 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
         heat_pump_on: bool,
         reason: str = "optimizer",
     ) -> None:
-        """Publish an ECL110 displace command via MQTT using integer displace values."""
+        """Publish ECL110 displace command via direct `/set` topic and optional legacy JSON topic."""
         displace = float(
             np.clip(displace_value, self._ecl110_displace_min, self._ecl110_displace_max)
         )
         displace_int = int(round(displace))
-        payload = {
+
+        legacy_payload = {
             "source": DOMAIN,
             "reason": reason,
             "timestamp": dt_util.now().isoformat(),
@@ -984,26 +1000,45 @@ class HeatPumpOptimizerCoordinator(DataUpdateCoordinator):
             },
         }
 
-        self._ecl110_last_payload = payload
+        self._ecl110_last_payload = legacy_payload
         self._ecl110_current_displace = float(displace_int)
 
-        if not self._ecl110_command_topic:
+        if not self._ecl110_displace_set_topic and not self._ecl110_command_topic:
             return
 
-        try:
-            await self.hass.services.async_call(
-                "mqtt",
-                "publish",
-                {
-                    "topic": self._ecl110_command_topic,
-                    "payload": json.dumps(payload),
-                    "qos": int(self._ecl110_qos),
-                    "retain": bool(self._ecl110_retain),
-                },
-                blocking=True,
-            )
-        except Exception as err:
-            _LOGGER.error("Error publishing ECL110 MQTT command: %s", err)
+        # Preferred path: write plain numeric payload directly to /set topic.
+        if self._ecl110_displace_set_topic:
+            try:
+                await self.hass.services.async_call(
+                    "mqtt",
+                    "publish",
+                    {
+                        "topic": self._ecl110_displace_set_topic,
+                        "payload": str(displace_int),
+                        "qos": int(self._ecl110_qos),
+                        "retain": bool(self._ecl110_retain),
+                    },
+                    blocking=True,
+                )
+            except Exception as err:
+                _LOGGER.error("Error publishing ECL110 direct displace MQTT command: %s", err)
+
+        # Backward compatibility path: optional legacy JSON command topic.
+        if self._ecl110_command_topic:
+            try:
+                await self.hass.services.async_call(
+                    "mqtt",
+                    "publish",
+                    {
+                        "topic": self._ecl110_command_topic,
+                        "payload": json.dumps(legacy_payload),
+                        "qos": int(self._ecl110_qos),
+                        "retain": bool(self._ecl110_retain),
+                    },
+                    blocking=True,
+                )
+            except Exception as err:
+                _LOGGER.error("Error publishing ECL110 legacy MQTT command: %s", err)
 
     async def async_publish_current_action(self, reason: str = "optimizer") -> None:
         """Publish MQTT command for the currently selected optimizer action."""

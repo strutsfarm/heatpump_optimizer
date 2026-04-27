@@ -25,6 +25,7 @@ from .const import (
     CONF_FLOOR_RETURN_TEMP_ENTITY,
     CONF_DHW_TEMP_ENTITY,
     CONF_ECL110_COMMAND_TOPIC,
+    CONF_ECL110_DISPLACE_SET_TOPIC,
     CONF_ECL110_STATE_TOPIC,
     CONF_ECL110_QOS,
     CONF_ECL110_RETAIN,
@@ -97,6 +98,7 @@ from .const import (
     DEFAULT_DHW_MIN_TEMP,
     DEFAULT_DHW_DAILY_CONSUMPTION,
     DEFAULT_ECL110_COMMAND_TOPIC,
+    DEFAULT_ECL110_DISPLACE_SET_TOPIC,
     DEFAULT_ECL110_STATE_TOPIC,
     DEFAULT_ECL110_QOS,
     DEFAULT_ECL110_RETAIN,
@@ -141,7 +143,7 @@ async def validate_tibber_token(token: str) -> bool:
 class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Heat Pump Optimizer."""
 
-    VERSION = 5  # bumped for ECL110 integer-displace output schema
+    VERSION = 6  # bumped for ECL110 direct /set topic configuration
 
     def __init__(self) -> None:
         """Initialize the config flow."""
@@ -198,6 +200,10 @@ class HeatPumpOptimizerConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             domain="sensor", device_class="temperature"
                         )
                     ),
+                    vol.Optional(
+                        CONF_ECL110_DISPLACE_SET_TOPIC,
+                        default=DEFAULT_ECL110_DISPLACE_SET_TOPIC,
+                    ): str,
                     vol.Optional(
                         CONF_ECL110_COMMAND_TOPIC,
                         default=DEFAULT_ECL110_COMMAND_TOPIC,
@@ -888,6 +894,13 @@ class HeatPumpOptimizerOptionsFlow(config_entries.OptionsFlow):
                         )
                     ),
                     # ECL110 MQTT displace control options
+                    vol.Optional(
+                        CONF_ECL110_DISPLACE_SET_TOPIC,
+                        default=current.get(
+                            CONF_ECL110_DISPLACE_SET_TOPIC,
+                            DEFAULT_ECL110_DISPLACE_SET_TOPIC,
+                        ),
+                    ): str,
                     vol.Optional(
                         CONF_ECL110_COMMAND_TOPIC,
                         default=current.get(

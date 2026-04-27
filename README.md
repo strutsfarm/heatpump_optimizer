@@ -349,9 +349,21 @@ This integration can now drive an ECL110-compatible controller using two explici
 - `heat_pump_on` (boolean): whether supply should be enabled
 - `displace_value` (°C): parallel shift command for ECL110 heat curve (published as integer to ECL110)
 
-### MQTT command payload
+### MQTT command publishing
 
-The coordinator publishes a JSON payload (via Home Assistant `mqtt.publish`) to the configured command topic:
+The coordinator now publishes the **preferred direct-write command** as a plain number to:
+
+- `ecl110_displace_set_topic` (default: `ecl110/flow_temp_control/displace/set`)
+
+Example payload:
+
+```text
+4
+```
+
+For backward compatibility, it can also publish a **legacy JSON payload** to:
+
+- `ecl110_command_topic` (default: `ecl110/command`)
 
 ```json
 {
@@ -373,7 +385,8 @@ The coordinator publishes a JSON payload (via Home Assistant `mqtt.publish`) to 
 
 ### New configuration options
 
-- `ecl110_command_topic`
+- `ecl110_displace_set_topic`
+- `ecl110_command_topic` (legacy JSON path)
 - `ecl110_state_topic`
 - `ecl110_mqtt_qos`
 - `ecl110_mqtt_retain`
